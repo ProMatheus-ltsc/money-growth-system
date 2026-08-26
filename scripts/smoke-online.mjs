@@ -6,11 +6,11 @@
  *
  * 用法（Node 18+，内置 fetch）：
  *   node scripts/smoke-online.mjs <BASE_URL> <INVITE_CODE> <ADMIN_USER> <ADMIN_PASS>
- *   例：node scripts/smoke-online.mjs https://fam-asset-tracker.pages.dev FAM2026 admin admin123456
+ *   例：node scripts/smoke-online.mjs https://money-growth-system.pages.dev FAM2026 admin admin123456
  *
  * 前置：已初始化管理员账号（POST /api/auth/init 完成）。
  */
-const BASE = (process.argv[2] || 'https://fam-asset-tracker.pages.dev').replace(/\/$/, '');
+const BASE = (process.argv[2] || 'https://money-growth-system.pages.dev').replace(/\/$/, '');
 const CODE = process.argv[3];
 const UNAME = process.argv[4];
 const UPASS = process.argv[5];
