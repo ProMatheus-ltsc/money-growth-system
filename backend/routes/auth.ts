@@ -103,7 +103,12 @@ auth.post('/verify-invite', async (c) => {
     return fail(c, 'INVALID', '请输入邀请码', 400);
   }
 
-  if (code !== c.env.INVITE_CODE) {
+  // 配置值统一 trim+大写后比较（大小写不敏感；用户 Dashboard 里存小写/带空格也能匹配）
+  const expected = String(c.env.INVITE_CODE ?? '').trim().toUpperCase();
+  if (!expected) {
+    return fail(c, 'GATE_REQUIRED', '邀请码未配置，请联系管理员设置 INVITE_CODE', 503);
+  }
+  if (code !== expected) {
     await recordIpFailure(c.env.DB, clientIp, nowIso, now);
     await c.env.DB.prepare('INSERT INTO login_audit_log (ip, username, success, reason, created_at) VALUES (?, ?, 0, ?, ?)')
       .bind(clientIp, null, '邀请码错误: ' + code, nowIso).run();
