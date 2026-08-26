@@ -2,7 +2,7 @@
 
 家庭资产增长记录工具 —— 记录每一笔，见证家庭财富成长。
 
-- **线上地址**: https://money-growth-system.pages.dev
+- **线上地址**: https://money-growth-sys.pages.dev
 - **仓库**: https://github.com/ProMatheus-ltsc/money-growth-system.git
 - **技术栈**: Cloudflare Pages + Pages Functions + D1（SQLite）+ Vite + React 18 + TypeScript + Tailwind CSS + Hono + ECharts
 

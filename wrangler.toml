@@ -1,7 +1,7 @@
-# money-growth-system — Cloudflare Pages + Pages Functions（04 §7.1）
+# money-growth-sys — Cloudflare Pages + Pages Functions（04 §7.1）
 # 本文件不含任何密钥。
 # V1.4（2026-08-27）：移除 R2 绑定（用户不需要云备份，R2 需绑卡）；备份仅保留本地导出/导入。
-name = "money-growth-system"
+name = "money-growth-sys"
 compatibility_date = "2026-08-01"
 pages_build_output_dir = "dist"
 
