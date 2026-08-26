@@ -1,0 +1,94 @@
+{
+  "name": "@shared/core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types/index.ts",
+    "./services/db": "./src/services/db.ts",
+    "./services/auth": "./src/services/auth.ts",
+    "./services/cloudflareD1": "./src/services/cloudflareD1.ts",
+    "./hooks/useAuth": "./src/hooks/useAuth.tsx",
+    "./hooks/useToast": "./src/hooks/useToast.tsx",
+    "./hooks/useDB": "./src/hooks/useDB.ts",
+    "./hooks/usePhaseLogic": "./src/hooks/usePhaseLogic.ts",
+    "./hooks/useSearch": "./src/hooks/useSearch.ts",
+    "./hooks/useSnapshots": "./src/hooks/useSnapshots.ts",
+    "./components/Layout": "./src/components/Layout.tsx",
+    "./components/Toast": "./src/components/Toast.tsx",
+    "./components/ConfirmDialog": "./src/components/ConfirmDialog.tsx",
+    "./components/LoadingSpinner": "./src/components/LoadingSpinner.tsx",
+    "./components/ProtectedRoute": "./src/components/ProtectedRoute.tsx",
+    "./components/SearchBar": "./src/components/SearchBar.tsx",
+    "./components/PasswordInput": "./src/components/PasswordInput.tsx",
+    "./components/TemplateCard": "./src/components/TemplateCard.tsx",
+    "./components/RecordList": "./src/components/RecordList.tsx",
+    "./components/VersionHistoryList": "./src/components/VersionHistoryList.tsx",
+    "./components/form/FormRenderer": "./src/components/form/FormRenderer.tsx",
+    "./components/form/FieldRenderer": "./src/components/form/FieldRenderer.tsx",
+    "./components/form/FieldInputs": "./src/components/form/FieldInputs.tsx",
+    "./components/form/FormTabs": "./src/components/form/FormTabs.tsx",
+    "./components/form/RepeatableSection": "./src/components/form/RepeatableSection.tsx",
+    "./components/form/PhaseIndicator": "./src/components/form/PhaseIndicator.tsx",
+    "./components/form/PhaseNotice": "./src/components/form/PhaseNotice.tsx",
+    "./components/form/OptionalFieldsGroup": "./src/components/form/OptionalFieldsGroup.tsx",
+    "./components/form/CollapsibleSection": "./src/components/form/CollapsibleSection.tsx",
+    "./components/form/FormNavButtons": "./src/components/form/FormNavButtons.tsx",
+    "./components/form/ConditionalField": "./src/components/form/ConditionalField.tsx",
+    "./components/form/quadrantConfig": "./src/components/form/quadrantConfig.ts",
+    "./components/stats/StatCard": "./src/components/stats/StatCard.tsx",
+    "./components/stats/KeywordList": "./src/components/stats/KeywordList.tsx",
+    "./components/stats/RootCauseTypePie": "./src/components/stats/RootCauseTypePie.tsx",
+    "./components/visualize/MatrixHeatmap": "./src/components/visualize/MatrixHeatmap.tsx",
+    "./components/visualize/FishboneDiagram": "./src/components/visualize/FishboneDiagram.tsx",
+    "./components/visualize/ComparisonDiffChart": "./src/components/visualize/ComparisonDiffChart.tsx",
+    "./components/visualize/CausalGraph": "./src/components/visualize/CausalGraph.tsx",
+    "./components/visualize/TimelineChart": "./src/components/visualize/TimelineChart.tsx",
+    "./components/visualize/WhyLadderChart": "./src/components/visualize/WhyLadderChart.tsx",
+    "./components/visualize/LoopDiagram": "./src/components/visualize/LoopDiagram.tsx",
+    "./components/visualize/finance/FinanceStackedArea": "./src/components/visualize/finance/FinanceStackedArea.tsx",
+    "./components/visualize/finance/FinanceTreemap": "./src/components/visualize/finance/FinanceTreemap.tsx",
+    "./components/visualize/finance/FinanceSankey": "./src/components/visualize/finance/FinanceSankey.tsx",
+    "./components/visualize/finance/FinanceWaterfall": "./src/components/visualize/finance/FinanceWaterfall.tsx",
+    "./components/visualize/finance/FinanceCompareBar": "./src/components/visualize/finance/FinanceCompareBar.tsx",
+    "./components/visualize/finance/FinanceDonut": "./src/components/visualize/finance/FinanceDonut.tsx",
+    "./utils/formValidation": "./src/utils/formValidation.ts",
+    "./utils/exportFormatter": "./src/utils/exportFormatter.ts",
+    "./utils/loopDetection": "./src/utils/loopDetection.ts",
+    "./utils/suggestions": "./src/utils/suggestions.ts"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@types/uuid": "^10.0.0"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0",
+    "react-router-dom": ">=6.0.0",
+    "idb": ">=8.0.0",
+    "uuid": ">=9.0.0",
+    "lucide-react": ">=0.300.0",
+    "react-hook-form": ">=7.0.0",
+    "clsx": ">=2.0.0",
+    "date-fns": ">=3.0.0",
+    "echarts": ">=5.5.0"
+  },
+  "peerDependenciesMeta": {
+    "recharts": {
+      "optional": true
+    },
+    "@xyflow/react": {
+      "optional": true
+    },
+    "flexsearch": {
+      "optional": true
+    },
+    "echarts": {
+      "optional": true
+    }
+  }
+}
