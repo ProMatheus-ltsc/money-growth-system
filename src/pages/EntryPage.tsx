@@ -129,9 +129,10 @@ export default function EntryPage() {
       const cur = currentMonth();
       let m: Mode;
       if (compareMonth(month, cur) > 0) m = 'future';
-      // CR-020：历史月且无快照 → 只读提示（原误判 current-new，保存才被服务端 409 拦截）
-      else if (compareMonth(month, cur) < 0) m = 'no-snapshot-past';
+      // CR-020/026：有快照优先（历史月有快照 → history-locked/current-overwrite，纠错入口可达）；
+      // 仅「历史月且无快照」才置 no-snapshot-past 只读提示
       else if (detailRes.exists) m = detailRes.locked ? 'history-locked' : 'current-overwrite';
+      else if (compareMonth(month, cur) < 0) m = 'no-snapshot-past';
       else m = 'current-new';
       setMode(m);
 

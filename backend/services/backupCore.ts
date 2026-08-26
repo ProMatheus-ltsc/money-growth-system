@@ -163,7 +163,6 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
     const b = await loadBundle(db, s.month);
     if (!b) continue;
     const nodeName = (nodeId: number) => nodeKeyPath(b.treeNodes, nodeId);
-    const topModuleName = (nodeId: number) => b.treeNodes.find((n) => n.id === nodeId)?.name ?? `#${nodeId}`;
     snapshots.push({
       month: s.month,
       treeConfigVersion: b.treeConfig.version,
@@ -174,7 +173,9 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
         hasNewFunds: a.has_new_funds === 1,
         updateSource: a.update_source,
       })),
-      moduleGains: b.gains.map((g) => ({ module: topModuleName(g.module_node_id), gain: g.gain_cents === null ? null : g.gain_cents / 100 })),
+      // CR-005：moduleGains 按「节点全路径名称」导出（与 assets.nodeKey 同构，恢复侧可直接命中；
+      // 原导出叶子名、恢复按全路径匹配 → 必 miss → node_id=0 脏行。05 §3.9 契约语义修订待用户拍板）
+      moduleGains: b.gains.map((g) => ({ module: nodeName(g.module_node_id), gain: g.gain_cents === null ? null : g.gain_cents / 100 })),
       income: b.catAmounts
         .filter((ca) => b.catItems.find((i) => i.id === ca.cat_item_id)?.direction === 'income')
         .map((ca) => ({ cat: catKeyPath(b.catItems, ca.cat_item_id), amount: ca.amount_cents / 100 })),
@@ -491,11 +492,15 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
       );
     }
     if (s.moduleGains.length > 0) {
+      // CR-005：module 已按节点全路径名称导出（与 assets.nodeKey 同构），直接命中 nodeIds；
+      // 旧版备份（叶子名）匹配失败时降级为 0 并记录，不再静默写入脏行语义。
       const rows = s.moduleGains.map((g) => {
-        // module 名 → 该版本树中顶层模块节点
-        let moduleId = 0;
-        for (const [key, id] of nodeIds) {
-          if (key === g.module) { moduleId = id; break; }
+        let moduleId = nodeIds.get(g.module) ?? 0;
+        if (moduleId === 0) {
+          // 兼容旧备份：全路径 key 的末段 == 叶子名 时也命中
+          for (const [key, id] of nodeIds) {
+            if (key.split('>').pop() === g.module) { moduleId = id; break; }
+          }
         }
         return [snapshotId, moduleId, g.gain === null ? null : Math.round(g.gain * 100)];
       });
