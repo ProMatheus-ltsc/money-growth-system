@@ -30,6 +30,13 @@ jobs:
       - name: 安装依赖
         run: npm ci --no-audit --no-fund
 
+      # file: 模式共享包依赖（lucide-react/uuid/idb/date-fns/react 等）：
+      # Actions clone 的 shared-core 无 node_modules，共享源码 import 这些包会解析失败
+      - name: 安装 shared-core 依赖
+        run: |
+          cd ../shared-core
+          npm install --no-audit --no-fund --legacy-peer-deps
+
       - name: 类型检查
         run: npm run typecheck
 

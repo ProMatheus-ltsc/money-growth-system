@@ -14,6 +14,9 @@ const vendorSrc = fileURLToPath(new URL('../shared-core/src', import.meta.url));
 export default defineConfig({
   plugins: [react()],
   resolve: {
+    // 防双 React：共享包（../shared-core）自身 node_modules 含 react 副本，
+    // 共享源码 import 'react' 若不强制去重会打包两份 → hooks dispatcher null 白屏（S5 经验）
+    dedupe: ['react', 'react-dom', 'react-router', 'react-router-dom', 'react-hook-form'],
     alias: [
       { find: /^@shared\/core$/, replacement: `${vendorSrc}/index.ts` },
       { find: /^@shared\/core\/(.+)$/, replacement: `${vendorSrc}/$1` },
