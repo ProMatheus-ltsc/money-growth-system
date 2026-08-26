@@ -1,0 +1,51 @@
+name: Deploy to Cloudflare Pages
+
+# 触发：push 到 main 自动部署；也可在 Actions 页面手动触发（Run workflow）
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: 22
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout 项目仓库
+        uses: actions/checkout@v4
+
+      # file: 依赖模式（04 §12）：shared-core 须存在于项目父目录
+      - name: Clone shared-core 到父目录
+        run: git clone --depth 1 https://github.com/ProMatheus-ltsc/shared-core.git ../shared-core
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 生产构建
+        run: npm run build
+
+      - name: D1 线上迁移
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler d1 migrations apply fam-asset-db --remote
+
+      - name: 部署 Pages（前端 + Functions）
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler pages deploy dist --project-name fam-asset-tracker
+
+      # 注：备份 Worker 已随 V1.4 移除（R2 云备份下线，仅本地备份）

@@ -1,8 +1,8 @@
 /**
- * 备份核心（05 §3.23~§3.27，F-07）：
+ * 备份核心（05 §3.26~§3.27，F-07，V1.4 移除 R2 后仅本地备份）：
  * - 导出结构（§3.26，schemaVersion: 1）：节点引用采用「名称路径」而非数据库 id，
  *   保证跨实例可恢复；不含账号与身份信息（users/sessions 不导出）。
- * - 云端每日备份（worker）、手动备份（§3.24）、本地下载（§3.26）同一结构同一校验器（04 §7.1）。
+ * - 本地下载（§3.26）与本地恢复（§3.27）同一结构同一校验器；云端备份（R2）已下线（04 §7.1）。
  * - 恢复：先校验后写入；非法拒绝且不改变任何现有数据（PRD §4 数据完整性）。
  */
 import type { Env } from '../env';
@@ -12,8 +12,6 @@ import { catKeyPath, getCatItems, getTreeNodes, loadBundle } from './snapshotRep
 import { nodeKeyPath } from './treeUtil';
 
 export const BACKUP_SCHEMA_VERSION = 1;
-export const BACKUP_PREFIX = 'backup-';
-export const BACKUP_RETENTION = 30;
 
 export interface BackupPayload {
   schemaVersion: number;
@@ -579,12 +577,4 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
   };
 }
 
-/** R2 备份对象清理：保留最新 retention 份 */
-export async function pruneBackups(bucket: Env['BACKUP'], retention = BACKUP_RETENTION) {
-  const listed = await bucket.list({ prefix: BACKUP_PREFIX });
-  const objects = [...listed.objects].sort((a, b) => (a.uploaded < b.uploaded ? 1 : -1));
-  const stale = objects.slice(retention);
-  for (const o of stale) {
-    await bucket.delete(o.key);
-  }
-}
+

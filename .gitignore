@@ -33,3 +33,6 @@ vite.config.ts.timestamp-*
 
 # 已废弃的 vendor 目录（file: 接入模式弃用，遗留待清理）
 vendor/
+
+# wrangler 本地变量（含密钥，不入库）
+.dev.vars

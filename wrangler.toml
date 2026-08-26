@@ -1,5 +1,6 @@
 # fam-asset-tracker — Cloudflare Pages + Pages Functions（04 §7.1）
-# 本文件不含任何密钥；D1 database_id 于 S10 `wrangler d1 create fam-asset-db` 后回填。
+# 本文件不含任何密钥。
+# V1.4（2026-08-27）：移除 R2 绑定（用户不需要云备份，R2 需绑卡）；备份仅保留本地导出/导入。
 name = "fam-asset-tracker"
 compatibility_date = "2026-08-01"
 pages_build_output_dir = "dist"
@@ -7,10 +8,5 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "fam-asset-db"
-# S10 建库后由 wrangler 生成的真实 id 回填（当前为占位，仅本地开发使用）
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "1fb49f23-e0cf-4592-9d7b-d17a5dc93f52"
 migrations_dir = "migrations"
-
-[[r2_buckets]]
-binding = "BACKUP"
-bucket_name = "fam-asset-backups"
