@@ -31,11 +31,12 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       # file: 模式共享包依赖（lucide-react/uuid/idb/date-fns/react 等）：
-      # Actions clone 的 shared-core 无 node_modules，共享源码 import 这些包会解析失败
+      # shared-core 依赖全部声明为 peerDependencies（dependencies 为空），
+      # npm 7+ 默认自动安装 peer；切勿加 --legacy-peer-deps（会跳过 peer 自动安装导致解析失败）
       - name: 安装 shared-core 依赖
         run: |
           cd ../shared-core
-          npm install --no-audit --no-fund --legacy-peer-deps
+          npm install --no-audit --no-fund
 
       - name: 类型检查
         run: npm run typecheck
