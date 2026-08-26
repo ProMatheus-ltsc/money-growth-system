@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --flow-in: #10b981;
+  --flow-out: #94a3b8;
+  --flow-dec: #ef4444;
+  --anim-fast: 150ms;
+  --anim-mid: 250ms;
+  --anim-collapse: 260ms;
+  --brand-900: #1a2332;
+  --brand-700: #2b6cb0;
+  --brand-500: #4299e1;
+  --brand-100: #ebf8ff;
+  --brand-50: #f0f4f8;
+}
+
+@layer base {
+  body {
+    @apply text-slate-700 antialiased;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all duration-150 hover:bg-blue-700 hover:shadow-md active:translate-y-px active:shadow-sm disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border-[1.5px] border-blue-600 bg-white px-4 py-2.5 text-sm font-semibold text-blue-600 transition-all duration-150 hover:bg-blue-50 active:translate-y-px disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-slate-600 transition-all duration-150 hover:bg-slate-100 hover:text-slate-900 active:bg-slate-200 disabled:opacity-50 disabled:pointer-events-none;
+  }
+  .card {
+    @apply rounded-xl bg-white p-5 shadow-[0_1px_3px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.04)] transition-shadow duration-200 hover:shadow-[0_4px_6px_rgba(0,0,0,0.07),0_2px_4px_rgba(0,0,0,0.04)];
+  }
+  .input-field {
+    @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 transition-all duration-150 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/15;
+  }
+}
