@@ -22,3 +22,7 @@ Thumbs.db
 
 # 运行时大文件（core dump / step-agent 产物，勿入库）
 core-node-*
+
+# vite 构建临时文件
+vite.config.ts.timestamp-*
+*.timestamp-*.mjs
