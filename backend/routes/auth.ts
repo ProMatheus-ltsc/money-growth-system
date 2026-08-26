@@ -6,10 +6,10 @@
  */
 import { Hono } from 'hono';
 import type { Env } from '../env';
-import { authFailed, conflict, invalidParam, lockedOut } from '../lib/errors';
-import { ok } from '../lib/http';
+import { ApiError, authFailed, conflict, forbidden, invalidParam, lockedOut } from '../lib/errors';
+import { fail, ok } from '../lib/http';
 import { derivePasswordHash, newToken, randomSaltHex } from '../lib/password';
-import { strField, USERNAME_RE } from '../lib/validate';
+import { strField, USERNAME_RE, idParam } from '../lib/validate';
 import { requireAuth, parseToken, type AppEnv } from '../middleware/auth';
 
 /** 账号级：连续失败后锁定时长（分钟） */
@@ -23,9 +23,6 @@ const TOKEN_TTL_DAYS = 7;
 const IP_MAX_ATTEMPTS = 10;
 /** IP 级限流：锁定时长（分钟） */
 const IP_LOCK_MINUTES = 30;
-
-/** 邀请码（登录前置门控，用于过滤非授权访问者） */
-const INVITE_CODE = 'LYFWYR';
 
 const auth = new Hono<AppEnv>();
 
@@ -79,21 +76,8 @@ auth.post('/init', async (c) => {
   return ok(c, { initialized: true });
 });
 
-// 测试用注册端点（临时开放）
-auth.post('/register', async (c) => {
-  const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
-  const username = typeof body?.username === 'string' ? body.username.trim() : '';
-  const password = typeof body?.password === 'string' ? body.password : '';
-  if (!username || !password || password.length < 8) {
-    return c.json({ code: 'INVALID', message: '用户名和密码(>=8位)必填' }, 400);
-  }
-  const now = new Date().toISOString();
-  const salt = randomSaltHex();
-  const hash = await derivePasswordHash(password, salt);
-  await c.env.DB.prepare('INSERT INTO users (username, password_hash, salt, role, failed_attempts, created_at) VALUES (?, ?, ?, ?, 0, ?)')
-    .bind(username, hash, salt, 'admin', now).run();
-  return ok(c, { created: true, username });
-});
+// 注：无鉴权 /api/auth/register 已删除（CR-001 BLOCKER：任何人可创建 admin）。
+// 唯一账号创建途径 = /api/auth/init（首次双账号）+ /api/auth/create-viewer（管理员建只读账号）。
 
 // 邀请码验证（前置门控，也受 IP 限流保护）
 auth.post('/verify-invite', async (c) => {
@@ -116,14 +100,14 @@ auth.post('/verify-invite', async (c) => {
   const code = typeof body?.code === 'string' ? body.code.trim().toUpperCase() : '';
 
   if (!code) {
-    return c.json({ code: 'INVALID', message: '请输入邀请码' }, 400);
+    return fail(c, 'INVALID', '请输入邀请码', 400);
   }
 
-  if (code !== INVITE_CODE) {
+  if (code !== c.env.INVITE_CODE) {
     await recordIpFailure(c.env.DB, clientIp, nowIso, now);
     await c.env.DB.prepare('INSERT INTO login_audit_log (ip, username, success, reason, created_at) VALUES (?, ?, 0, ?, ?)')
       .bind(clientIp, null, '邀请码错误: ' + code, nowIso).run();
-    return c.json({ code: 'INVALID', message: '邀请码不正确' }, 403);
+    return fail(c, 'INVALID', '邀请码不正确', 403);
   }
 
   // 验证成功，返回一个短期凭证（10分钟有效），前端用它解锁登录表单
@@ -155,15 +139,15 @@ auth.post('/login', async (c) => {
 
   const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
 
-  // --- 邀请码门控验证：登录必须携带有效 gateToken ---
+  // --- 邀请码门控验证：登录必须携带有效 gateToken（一次性，验证通过即消费） ---
   const gateToken = typeof body?.gateToken === 'string' ? body.gateToken : '';
   if (!gateToken) {
-    return c.json({ code: 'GATE_REQUIRED', message: '请先通过邀请码验证' }, 403);
+    return fail(c, 'GATE_REQUIRED', '请先通过邀请码验证', 403);
   }
   const gate = await c.env.DB.prepare('SELECT expires_at FROM gate_tokens WHERE token = ?')
     .bind(gateToken).first<{ expires_at: string }>();
   if (!gate || gate.expires_at < nowIso) {
-    return c.json({ code: 'GATE_EXPIRED', message: '邀请码验证已过期，请重新验证' }, 403);
+    return fail(c, 'GATE_EXPIRED', '邀请码验证已过期，请重新验证', 403);
   }
   const errors: { field: string; message: string }[] = [];
   const username = strField(body?.username, 'username', errors, { max: 64, label: '用户名' });
@@ -206,6 +190,7 @@ auth.post('/login', async (c) => {
   }
 
   // 成功：清零账号失败计数 + 清零 IP 失败计数，签发 7 天令牌（支持多设备同时在线）
+  // CR-017：消费 gateToken（一次性），登录成功即删除
   const expiresAt = new Date(now.getTime() + TOKEN_TTL_DAYS * 24 * 3600_000).toISOString();
   const token = newToken();
   await c.env.DB.batch([
@@ -213,6 +198,7 @@ auth.post('/login', async (c) => {
     c.env.DB.prepare('INSERT INTO sessions (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
       .bind(token, user.id, expiresAt, nowIso),
     c.env.DB.prepare('DELETE FROM ip_rate_limit WHERE ip = ?').bind(clientIp),
+    c.env.DB.prepare('DELETE FROM gate_tokens WHERE token = ?').bind(gateToken),
     c.env.DB.prepare('INSERT INTO login_audit_log (ip, username, success, reason, created_at) VALUES (?, ?, 1, ?, ?)')
       .bind(clientIp, username, '登录成功', nowIso),
   ]);
@@ -242,7 +228,7 @@ async function recordIpFailure(db: D1Database, ip: string, nowIso: string, now: 
 /** POST /create-viewer — 管理员创建浏览者账户（注册端点禁用后的唯一账号创建途径） */
 auth.post('/create-viewer', requireAuth, async (c) => {
   const user = c.get('user');
-  if (user.role !== 'admin') throw new (await import('../lib/errors')).ApiError('FORBIDDEN', 403, '仅管理员可创建浏览者账户');
+  if (user.role !== 'admin') throw new ApiError('FORBIDDEN', 403, '仅管理员可创建浏览者账户');
 
   const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
   const errors: { field: string; message: string }[] = [];
@@ -273,7 +259,7 @@ auth.post('/create-viewer', requireAuth, async (c) => {
 /** GET /users — 管理员获取所有用户列表（仅返回非敏感字段） */
 auth.get('/users', requireAuth, async (c) => {
   const user = c.get('user');
-  if (user.role !== 'admin') throw new (await import('../lib/errors')).ApiError('FORBIDDEN', 403, '仅管理员可查看用户列表');
+  if (user.role !== 'admin') throw new ApiError('FORBIDDEN', 403, '仅管理员可查看用户列表');
 
   const rows = await c.env.DB.prepare('SELECT id, username, role, created_at FROM users ORDER BY created_at ASC')
     .all<{ id: number; username: string; role: string; created_at: string }>();
@@ -283,9 +269,9 @@ auth.get('/users', requireAuth, async (c) => {
 /** DELETE /users/:id — 管理员删除用户（同时清除其所有会话；不可删除自己） */
 auth.delete('/users/:id', requireAuth, async (c) => {
   const user = c.get('user');
-  if (user.role !== 'admin') throw new (await import('../lib/errors')).ApiError('FORBIDDEN', 403, '仅管理员可删除用户');
+  if (user.role !== 'admin') throw new ApiError('FORBIDDEN', 403, '仅管理员可删除用户');
 
-  const targetId = Number(c.req.param('id'));
+  const targetId = idParam(c.req.param('id'));
   if (targetId === user.id) throw invalidParam('不能删除自己的账户', []);
 
   await c.env.DB.batch([

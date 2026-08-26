@@ -66,8 +66,10 @@ export default function BackupPage() {
     setBusy(key);
     try {
       const res = await api<{ restored: boolean; counts: BackupCounts }>('/api/backups/restore', { method: 'POST', body: { key } });
-      showToast(`已从 ${key} 恢复（快照 ${res.counts.snapshots} 个月 / 负债 ${res.counts.debts} 项）`, 'success', 6000);
-      await load();
+      // CR-006：备份不含折旧/重估/或有负债/健康配置扩展表，恢复后需重新录入（页面内另有提示）
+      showToast(`已从 ${key} 恢复（快照 ${res.counts.snapshots} 个月 / 负债 ${res.counts.debts} 项），即将刷新页面`, 'success', 6000);
+      // CR-025：与本地导入一致，恢复后全局刷新（其他页面残留旧数据）
+      setTimeout(() => window.location.reload(), 1200);
     } catch (e) {
       const ae = e as ApiError;
       showToast(ae.details?.map((d) => d.message).join('；') ?? ae.message ?? '恢复失败（现有数据未变更）', 'error', 8000);

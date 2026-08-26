@@ -120,26 +120,39 @@ catConfigs.post('/', requireAuth, requireAdmin, async (c) => {
   const now = new Date().toISOString();
   const latest = await c.env.DB.prepare('SELECT MAX(version) AS v FROM cat_configs').first<{ v: number | null }>();
   const version = (latest?.v ?? 0) + 1;
-  const cfgRes = await c.env.DB.prepare('INSERT INTO cat_configs (version, threshold_cents, created_at) VALUES (?, ?, ?)')
-    .bind(version, thresholdCents, now)
-    .run();
-  const configId = Number(cfgRes.meta.last_row_id);
+  // CR-007：写入含动态 id 依赖（configId→item ids），无法并入单 D1 batch；
+  // 失败补偿删除，不留半截配置版本。
+  let configId = 0;
+  try {
+    const cfgRes = await c.env.DB.prepare('INSERT INTO cat_configs (version, threshold_cents, created_at) VALUES (?, ?, ?)')
+      .bind(version, thresholdCents, now)
+      .run();
+    configId = Number(cfgRes.meta.last_row_id);
 
-  const insertStmts = items.map((it) =>
-    c.env.DB.prepare(
-      'INSERT INTO cat_items (config_id, parent_id, direction, name, sort_order, created_at) VALUES (?, NULL, ?, ?, ?, ?)'
-    ).bind(configId, it.direction as string, String(it.name).trim(), typeof it.sortOrder === 'number' ? it.sortOrder : 0, now)
-  );
-  await c.env.DB.batch(insertStmts);
-  const inserted = await c.env.DB.prepare('SELECT id FROM cat_items WHERE config_id = ? ORDER BY id').bind(configId).all<{ id: number }>();
-  const updates: ReturnType<AppEnv['Bindings']['DB']['prepare']>[] = [];
-  items.forEach((it, i) => {
-    const pi = parentOf.get(i);
-    if (pi !== null && pi !== undefined) {
-      updates.push(c.env.DB.prepare('UPDATE cat_items SET parent_id = ? WHERE id = ?').bind(inserted.results[pi].id, inserted.results[i].id));
-    }
-  });
-  if (updates.length > 0) await c.env.DB.batch(updates);
+    const insertStmts = items.map((it) =>
+      c.env.DB.prepare(
+        'INSERT INTO cat_items (config_id, parent_id, direction, name, sort_order, created_at) VALUES (?, NULL, ?, ?, ?, ?)'
+      ).bind(configId, it.direction as string, String(it.name).trim(), typeof it.sortOrder === 'number' ? it.sortOrder : 0, now)
+    );
+    await c.env.DB.batch(insertStmts);
+    const inserted = await c.env.DB.prepare('SELECT id FROM cat_items WHERE config_id = ? ORDER BY id').bind(configId).all<{ id: number }>();
+    const updates: ReturnType<AppEnv['Bindings']['DB']['prepare']>[] = [];
+    items.forEach((it, i) => {
+      const pi = parentOf.get(i);
+      if (pi !== null && pi !== undefined) {
+        updates.push(c.env.DB.prepare('UPDATE cat_items SET parent_id = ? WHERE id = ?').bind(inserted.results[pi].id, inserted.results[i].id));
+      }
+    });
+    if (updates.length > 0) await c.env.DB.batch(updates);
+  } catch (e) {
+    await c.env.DB
+      .batch([
+        c.env.DB.prepare('DELETE FROM cat_items WHERE config_id = ?').bind(configId),
+        c.env.DB.prepare('DELETE FROM cat_configs WHERE id = ?').bind(configId),
+      ])
+      .catch(() => undefined);
+    throw e;
+  }
 
   return ok(c, { configId, version });
 });

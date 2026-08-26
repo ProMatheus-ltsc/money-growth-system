@@ -7,6 +7,7 @@
  * 权限：admin 可写，viewer 可读。
  */
 import { Hono } from 'hono';
+import { idParam } from '../lib/validate';
 import { invalidParam, notFound } from '../lib/errors';
 import { ok } from '../lib/http';
 import type { AppEnv } from '../middleware/auth';
@@ -58,7 +59,7 @@ revaluation.get('/', requireAuth, async (c) => {
 });
 
 revaluation.get('/:id', requireAuth, async (c) => {
-  const id = Number(c.req.param('id'));
+  const id = idParam(c.req.param('id'));
   if (!Number.isInteger(id) || id < 1) throw invalidParam('id 必须为正整数');
   const row = await c.env.DB.prepare('SELECT * FROM asset_revaluations WHERE id = ?').bind(id).first<RevaluationRow>();
   if (!row) throw notFound('重估记录不存在');
@@ -120,7 +121,7 @@ revaluation.post('/', requireAuth, requireAdmin, async (c) => {
 });
 
 revaluation.delete('/:id', requireAuth, requireAdmin, async (c) => {
-  const id = Number(c.req.param('id'));
+  const id = idParam(c.req.param('id'));
   if (!Number.isInteger(id) || id < 1) throw invalidParam('id 必须为正整数');
   const existing = await c.env.DB.prepare('SELECT id FROM asset_revaluations WHERE id = ?').bind(id).first();
   if (!existing) throw notFound('重估记录不存在');

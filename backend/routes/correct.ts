@@ -101,15 +101,15 @@ correct.post('/snapshots/:month/correct', requireAuth, requireAdmin, async (c) =
 
   await writeSnapshot(c.env.DB, month, validated);
   const correctedAt = new Date().toISOString();
-  await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE monthly_snapshots SET corrected_at = ? WHERE month = ?').bind(correctedAt, month),
-  ]);
   const freshBundle = await loadBundle(c.env.DB, month);
   const diff = computeDiff(oldBundle, freshBundle!);
   const user = c.get('user');
-  await c.env.DB.prepare('INSERT INTO correction_logs (snapshot_id, corrected_at, diff_json, operator_id, operator_name) VALUES (?, ?, ?, ?, ?)')
-    .bind(freshBundle!.snapshot.id, correctedAt, JSON.stringify(diff), user.id, user.username)
-    .run();
+  // CR-003：corrected_at 更新与纠错日志写入并入单 batch（原子；避免日志失败则纠错无痕）
+  await c.env.DB.batch([
+    c.env.DB.prepare('UPDATE monthly_snapshots SET corrected_at = ? WHERE month = ?').bind(correctedAt, month),
+    c.env.DB.prepare('INSERT INTO correction_logs (snapshot_id, corrected_at, diff_json, operator_id, operator_name) VALUES (?, ?, ?, ?, ?)')
+      .bind(freshBundle!.snapshot.id, correctedAt, JSON.stringify(diff), user.id, user.username),
+  ]);
 
   return ok(c, { month, correctedAt, diff });
 });

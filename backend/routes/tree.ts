@@ -208,15 +208,19 @@ tree.post('/', requireAuth, requireAdmin, async (c) => {
   if (errors.length > 0) throw invalidParam('资产树结构校验失败', errors);
 
   // ---- 写入新版本（校验失败整体不写入，到这里才开始写） ----
+  // CR-007：写入序列含动态 id 依赖（configId→node ids），无法并入单 D1 batch；
+  // 以「失败补偿删除」保证不留半截配置版本（回滚 config + nodes + 迁移折旧）。
   const now = new Date().toISOString();
   const latest = await c.env.DB.prepare('SELECT MAX(version) AS v FROM tree_configs').first<{ v: number | null }>();
   const version = (latest?.v ?? 0) + 1;
-  const cfgRes = await c.env.DB.prepare(
-    'INSERT INTO tree_configs (version, effective_from_month, note, created_at) VALUES (?, ?, ?, ?)'
-  )
-    .bind(version, effectiveFromMonth, note, now)
-    .run();
-  const configId = Number(cfgRes.meta.last_row_id);
+  let configId = 0;
+  try {
+    const cfgRes = await c.env.DB.prepare(
+      'INSERT INTO tree_configs (version, effective_from_month, note, created_at) VALUES (?, ?, ?, ?)'
+    )
+      .bind(version, effectiveFromMonth, note, now)
+      .run();
+    configId = Number(cfgRes.meta.last_row_id);
 
   // 两遍插入：先插全部节点（parent_id=NULL），再回填批内父引用
   const insertStmts = nodes.map((n) =>
@@ -295,6 +299,17 @@ tree.post('/', requireAuth, requireAdmin, async (c) => {
         );
       if (migStmts.length > 0) await c.env.DB.batch(migStmts);
     }
+  }
+  } catch (e) {
+    // CR-007：写入中途失败 → 补偿回滚，不留半截配置版本
+    await c.env.DB
+      .batch([
+        c.env.DB.prepare('DELETE FROM asset_depreciation WHERE config_id = ?').bind(configId),
+        c.env.DB.prepare('DELETE FROM tree_nodes WHERE config_id = ?').bind(configId),
+        c.env.DB.prepare('DELETE FROM tree_configs WHERE id = ?').bind(configId),
+      ])
+      .catch(() => undefined);
+    throw e;
   }
 
   return ok(c, { configId, version });

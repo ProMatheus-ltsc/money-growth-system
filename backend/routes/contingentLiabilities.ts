@@ -9,6 +9,7 @@
  * 权限：admin 可写，viewer 可读。
  */
 import { Hono } from 'hono';
+import { idParam } from '../lib/validate';
 import { invalidParam, notFound } from '../lib/errors';
 import { ok } from '../lib/http';
 import type { AppEnv } from '../middleware/auth';
@@ -108,7 +109,7 @@ contingent.post('/', requireAuth, requireAdmin, async (c) => {
 });
 
 contingent.put('/:id', requireAuth, requireAdmin, async (c) => {
-  const id = Number(c.req.param('id'));
+  const id = idParam(c.req.param('id'));
   if (!Number.isInteger(id) || id < 1) throw invalidParam('id 必须为正整数');
 
   const existing = await c.env.DB.prepare('SELECT * FROM contingent_liabilities WHERE id = ?').bind(id).first<ContingentLiabilityRow>();
@@ -146,7 +147,7 @@ contingent.put('/:id', requireAuth, requireAdmin, async (c) => {
 });
 
 contingent.delete('/:id', requireAuth, requireAdmin, async (c) => {
-  const id = Number(c.req.param('id'));
+  const id = idParam(c.req.param('id'));
   if (!Number.isInteger(id) || id < 1) throw invalidParam('id 必须为正整数');
   const existing = await c.env.DB.prepare('SELECT id FROM contingent_liabilities WHERE id = ?').bind(id).first();
   if (!existing) throw notFound('或有负债记录不存在');

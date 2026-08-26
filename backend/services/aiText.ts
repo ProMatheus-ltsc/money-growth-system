@@ -2,6 +2,7 @@
  * 四分区财务数据包文本构造（05 §3.28，F-09，CHG-02 改动三）：
  * ## 数据 / ## 提示词 / ## 结果格式 / ## 示例
  * 服务端拼接，不含用户身份信息（F-09 验收 3）。
+ * CR-013：按四分区拆独立 builder（单一职责），parents Set 仅构建一次。
  */
 import type { Env } from '../env';
 import { addMonths } from '../lib/month';
@@ -18,16 +19,10 @@ function pct(r: number | null): string {
   return r === null ? '—' : `${(r * 100).toFixed(2)}%`;
 }
 
-export async function buildAiExportText(db: Env['DB'], b: SnapshotBundle): Promise<string> {
+/** (a) 资产树完整层级 + 模块收益率四态口径 */
+function buildAssetTreeLines(b: SnapshotBundle, gainCompare: { module: string; mode: string; actualRate: number | null; gain: number | null }[]): string[] {
   const month = b.snapshot.month;
-  const lines: string[] = [];
-
-  // ---------- ## 数据 ----------
-  lines.push('## 数据');
-
-  // (a) 资产树完整层级
-  lines.push(`（a）资产树（${month} 当月，单位：元）：`);
-  const gainCompare = buildGainCompare(b, await loadBundle(db, addMonths(month, -1)));
+  const lines: string[] = [`（a）资产树（${month} 当月，单位：元）：`];
   const rateByModule = new Map(gainCompare.map((g) => [g.module, g]));
   const sums = catAmountByCat(b);
   const balanceOfNode = (nodeId: number) => b.assets.find((a) => a.node_id === nodeId)?.balance_cents ?? 0;
@@ -37,9 +32,10 @@ export async function buildAiExportText(db: Env['DB'], b: SnapshotBundle): Promi
     arr.push(n);
     byParent.set(n.parent_id, arr);
   }
+  // CR-013：parents Set 提到递归外构建一次（原实现每次递归重建，O(depth×n)）
+  const parents = new Set(b.treeNodes.map((x) => x.parent_id));
   const walkNode = (n: (typeof b.treeNodes)[number], depth: number) => {
     const indent = '　'.repeat(depth);
-    const parents = new Set(b.treeNodes.map((x) => x.parent_id));
     const isLeaf = !parents.has(n.id);
     const balanceTxt = isLeaf ? `，余额 ${yuan(balanceOfNode(n.id) / 100)} 元` : '';
     const rate = effectiveRate(b.treeNodes, n.id);
@@ -63,9 +59,12 @@ export async function buildAiExportText(db: Env['DB'], b: SnapshotBundle): Promi
       lines.push(`　↳ 模块口径：${modeTxt}`);
     }
   }
+  return lines;
+}
 
-  // (b) 负债清单
-  lines.push('（b）负债清单：');
+/** (b) 负债清单 */
+function buildDebtLines(b: SnapshotBundle): string[] {
+  const lines: string[] = ['（b）负债清单：'];
   if (b.debtsSnap.length === 0) lines.push('　- 无负债');
   for (const sd of b.debtsSnap) {
     const master = b.debtsMaster.find((d) => d.id === sd.debt_id);
@@ -75,22 +74,29 @@ export async function buildAiExportText(db: Env['DB'], b: SnapshotBundle): Promi
       `　- ${master.name}/${typeTxt}/${master.term === 'short' ? '短期(<1年)' : '长期(≥1年)'}/余额 ${yuan(sd.balance_cents / 100)} 元/年利率 ${(master.annual_rate * 100).toFixed(2)}%/${master.fixed_repayment === 1 ? `固定还款（月还 ${yuan(master.monthly_payment_cents / 100)} 元）` : '非固定还款'}/当月还款 ${yuan(sd.repayment_cents / 100)} 元`
     );
   }
+  return lines;
+}
 
-  // (c) 三张财务报表当期数据
+/** (c) 三张财务报表当期数据 */
+function buildStatementsLines(b: SnapshotBundle, prevBundle: SnapshotBundle | null): string[] {
   const totals = totalsOf(b);
-  const prev = await loadBundle(db, addMonths(month, -1));
-  const cashFlow = buildCashFlow(b, prev);
-  lines.push('（c）三张财务报表（当期）：');
-  lines.push(`　资产负债表：资产总计 ${yuan(totals.totalAssets)}，负债总计 ${yuan(totals.totalDebt)}（短期 ${yuan(b.debtsSnap.filter((sd) => b.debtsMaster.find((d) => d.id === sd.debt_id)?.term === 'short').reduce((s, sd) => s + sd.balance_cents, 0) / 100)}，长期 ${yuan(b.debtsSnap.filter((sd) => b.debtsMaster.find((d) => d.id === sd.debt_id)?.term === 'long').reduce((s, sd) => s + sd.balance_cents, 0) / 100)}），净资产 ${yuan(totals.netWorth)}，负债率 ${totals.debtRatio === null ? '—' : (totals.debtRatio * 100).toFixed(2) + '%'}`);
+  const cashFlow = buildCashFlow(b, prevBundle);
+  const lines: string[] = ['（c）三张财务报表（当期）：'];
+  const shortCents = b.debtsSnap.filter((sd) => b.debtsMaster.find((d) => d.id === sd.debt_id)?.term === 'short').reduce((s, sd) => s + sd.balance_cents, 0);
+  const longCents = b.debtsSnap.filter((sd) => b.debtsMaster.find((d) => d.id === sd.debt_id)?.term === 'long').reduce((s, sd) => s + sd.balance_cents, 0);
+  lines.push(`　资产负债表：资产总计 ${yuan(totals.totalAssets)}，负债总计 ${yuan(totals.totalDebt)}（短期 ${yuan(shortCents / 100)}，长期 ${yuan(longCents / 100)}），净资产 ${yuan(totals.netWorth)}，负债率 ${totals.debtRatio === null ? '—' : (totals.debtRatio * 100).toFixed(2) + '%'}`);
   lines.push(`　收支表：总收入 ${yuan(totals.totalIncome)}，总支出 ${yuan(totals.totalExpense)}，结余 ${yuan(totals.balance)}（结余 = 总收入 − 总支出；负债还款不计入支出）`);
   if (cashFlow) {
     lines.push(`　现金流量表：期初现金 ${yuan(cashFlow.kpi.openingCash)} + 净现金流 ${yuan(cashFlow.kpi.netCashFlow)} = 期末现金 ${yuan(cashFlow.kpi.closingCash)}`);
   } else {
     lines.push('　现金流量表：上月无快照，暂不可用');
   }
+  return lines;
+}
 
-  // (d) 近 12 个月趋势
-  lines.push('（d）近 12 个月趋势：');
+/** (d) 近 12 个月趋势 */
+async function buildTrendLines(db: Env['DB'], month: string): Promise<string[]> {
+  const lines: string[] = ['（d）近 12 个月趋势：'];
   const cutoff = addMonths(month, -11);
   const { results: trendRows } = await db
     .prepare('SELECT month, total_assets_cents, total_debt_cents, total_income_cents, total_expense_cents FROM monthly_snapshots WHERE month >= ? AND month <= ? ORDER BY month ASC')
@@ -109,9 +115,13 @@ export async function buildAiExportText(db: Env['DB'], b: SnapshotBundle): Promi
     lines.push(`　结余合计：${fmt(sumBalance)}`);
     lines.push(`　逐月：${trendRows.map((r) => `${r.month} 总资产${fmt(r.total_assets_cents)}/结余${fmt(r.total_income_cents - r.total_expense_cents)}`).join('；')}`);
   }
+  return lines;
+}
 
-  // (e) 月度收支二级分类明细（含大额单笔）
-  lines.push('（e）收支二级分类明细（含≥阈值大额单笔）：');
+/** (e) 月度收支二级分类明细（含大额单笔） */
+function buildCategoryDetailLines(b: SnapshotBundle): string[] {
+  const lines: string[] = ['（e）收支二级分类明细（含≥阈值大额单笔）：'];
+  const sums = catAmountByCat(b);
   for (const dir of ['income', 'expense'] as const) {
     const dirTxt = dir === 'income' ? '收入' : '支出';
     for (const top of topCats(b.catItems, dir)) {
@@ -126,17 +136,39 @@ export async function buildAiExportText(db: Env['DB'], b: SnapshotBundle): Promi
       lines.push(`　${dirTxt}·${top.name}（合计 ${yuan((sums.get(top.id) ?? 0) / 100)}）：${items.join('；') || '无'}`);
     }
   }
+  return lines;
+}
 
-  // ---------- ## 提示词 ----------
-  lines.push('');
-  lines.push('## 提示词');
-  lines.push('你是一名家庭财务顾问，请基于以上数据，从资产配置、负债结构、收支结余三方面给出优化建议。');
-  lines.push('要求：1）每条建议对应一个资产模块或负债/收支项；2）建议需可执行（含具体动作与理由）；3）优先级分为 高/中/低；4）考虑该家庭的风险偏好与目标收益率口径（目标月收益率 = 年化/12）；5）输出严格遵循「## 结果格式」的 JSON 结构，不要输出其他内容。');
+/** ## 数据（a~e 全量） */
+async function buildDataSection(db: Env['DB'], b: SnapshotBundle): Promise<string[]> {
+  const month = b.snapshot.month;
+  const gainCompare = buildGainCompare(b, await loadBundle(db, addMonths(month, -1)));
+  const prevBundle = await loadBundle(db, addMonths(month, -1));
+  return [
+    '## 数据',
+    ...buildAssetTreeLines(b, gainCompare),
+    ...buildDebtLines(b),
+    ...buildStatementsLines(b, prevBundle),
+    ...(await buildTrendLines(db, month)),
+    ...buildCategoryDetailLines(b),
+  ];
+}
 
-  // ---------- ## 结果格式 ----------
-  lines.push('');
-  lines.push('## 结果格式');
-  lines.push(
+/** ## 提示词 */
+function buildPromptSection(): string[] {
+  return [
+    '',
+    '## 提示词',
+    '你是一名家庭财务顾问，请基于以上数据，从资产配置、负债结构、收支结余三方面给出优化建议。',
+    '要求：1）每条建议对应一个资产模块或负债/收支项；2）建议需可执行（含具体动作与理由）；3）优先级分为 高/中/低；4）考虑该家庭的风险偏好与目标收益率口径（目标月收益率 = 年化/12）；5）输出严格遵循「## 结果格式」的 JSON 结构，不要输出其他内容。',
+  ];
+}
+
+/** ## 结果格式 */
+function buildResultSchemaSection(): string[] {
+  return [
+    '',
+    '## 结果格式',
     JSON.stringify(
       {
         analysisDate: 'YYYY-MM-DD',
@@ -145,15 +177,17 @@ export async function buildAiExportText(db: Env['DB'], b: SnapshotBundle): Promi
       },
       null,
       2
-    )
-  );
+    ),
+  ];
+}
 
-  // ---------- ## 示例 ----------
-  lines.push('');
-  lines.push('## 示例');
-  lines.push(`请求：请对 ${month} 的家庭财务数据给出优化建议（数据见「## 数据」分区）。`);
-  lines.push('期望返回：');
-  lines.push(
+/** ## 示例 */
+function buildExampleSection(month: string): string[] {
+  return [
+    '',
+    '## 示例',
+    `请求：请对 ${month} 的家庭财务数据给出优化建议（数据见「## 数据」分区）。`,
+    '期望返回：',
     JSON.stringify(
       {
         analysisDate: new Date().toISOString().slice(0, 10),
@@ -171,8 +205,17 @@ export async function buildAiExportText(db: Env['DB'], b: SnapshotBundle): Promi
       },
       null,
       2
-    )
-  );
+    ),
+  ];
+}
 
+/** 四分区数据包文本（## 数据 / ## 提示词 / ## 结果格式 / ## 示例） */
+export async function buildAiExportText(db: Env['DB'], b: SnapshotBundle): Promise<string> {
+  const lines = [
+    ...(await buildDataSection(db, b)),
+    ...buildPromptSection(),
+    ...buildResultSchemaSection(),
+    ...buildExampleSection(b.snapshot.month),
+  ];
   return lines.join('\n');
 }

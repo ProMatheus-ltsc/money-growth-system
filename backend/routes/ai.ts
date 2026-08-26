@@ -7,6 +7,7 @@
  * 权限：仅 admin（AI 页对只读账号不可见）。
  */
 import { Hono } from 'hono';
+import { idParam } from '../lib/validate';
 import type { ErrorDetail } from '../lib/errors';
 import { invalidParam, notFound } from '../lib/errors';
 import { ok } from '../lib/http';
@@ -146,7 +147,7 @@ ai.get('/analyses', requireAuth, requireAdmin, async (c) => {
 
 // §3.31 删除 AI 记录
 ai.delete('/analyses/:id', requireAuth, requireAdmin, async (c) => {
-  const id = Number(c.req.param('id'));
+  const id = idParam(c.req.param('id'));
   const existing = await c.env.DB.prepare('SELECT id FROM ai_analyses WHERE id = ?').bind(id).first();
   if (!existing) throw notFound('AI 分析记录不存在');
   await c.env.DB.prepare('DELETE FROM ai_analyses WHERE id = ?').bind(id).run();

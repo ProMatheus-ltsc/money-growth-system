@@ -7,6 +7,7 @@
  * 读接口 admin + viewer；生成仅 admin（写操作，决策 D6）。
  */
 import { Hono } from 'hono';
+import { idParam } from '../lib/validate';
 import type { ErrorDetail } from '../lib/errors';
 import { conflict, invalidParam, notFound } from '../lib/errors';
 import { ok } from '../lib/http';
@@ -362,7 +363,7 @@ reportSnapshots.get('/compare', requireAuth, async (c) => {
 
 // §3.20 报告快照详情
 reportSnapshots.get('/:id', requireAuth, async (c) => {
-  const id = Number(c.req.param('id'));
+  const id = idParam(c.req.param('id'));
   const r = await c.env.DB.prepare('SELECT * FROM report_snapshots WHERE id = ?').bind(id).first<{
     id: number; report_type: string; start_month: string; end_month: string; generated_at: string;
     payload_json: string;

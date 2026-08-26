@@ -2,6 +2,16 @@
  * 通用字段校验原语：非法时推入 errors，调用方统一抛 INVALID_PARAM（details 逐条）。
  */
 import type { ErrorDetail } from './errors';
+import { invalidParam } from './errors';
+
+/** URL 路径参数 id 解析（CR-021）：非法 id 抛 400 INVALID_PARAM，而非依赖 D1 绑定语义（避免 500） */
+export function idParam(raw: string, label = 'id'): number {
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw invalidParam(`${label} 必须为正整数`, [{ field: label, message: `非法 ${label}：${raw}` }]);
+  }
+  return id;
+}
 
 export function strField(
   v: unknown,

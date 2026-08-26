@@ -325,9 +325,12 @@ export async function writeSnapshot(db: Env['DB'], month: string, v: ValidatedSn
           snapshotId
         ),
       ...detailInsertStmts(db, snapshotId, v, now),
+      ...debtSyncStmts(db, v, now),
     ];
     await db.batch(stmts);
   } else {
+    // CR-003：主表行先插（须取 last_row_id），明细 + 负债主档同步并入单 batch（原子）；
+    // 明细失败时补偿删除主表行，不留脏快照。
     const res = await db
       .prepare(
         `INSERT INTO monthly_snapshots (month, tree_config_id, cat_config_id, total_assets_cents, total_debt_cents,
@@ -347,15 +350,18 @@ export async function writeSnapshot(db: Env['DB'], month: string, v: ValidatedSn
       )
       .run();
     snapshotId = Number(res.meta.last_row_id);
-    const stmts = detailInsertStmts(db, snapshotId, v, now);
-    if (stmts.length > 0) await db.batch(stmts);
+    const stmts = [...detailInsertStmts(db, snapshotId, v, now), ...debtSyncStmts(db, v, now)];
+    try {
+      if (stmts.length > 0) await db.batch(stmts);
+    } catch (e) {
+      await db
+        .prepare('DELETE FROM monthly_snapshots WHERE id = ?')
+        .bind(snapshotId)
+        .run()
+        .catch(() => undefined);
+      throw e;
+    }
   }
-
-  // 负债主档余额同步（04 §4.2：保存快照时由服务端同步为最新月余额）
-  const debtSync = v.debts.map((d) =>
-    db.prepare('UPDATE debts SET balance_cents = ?, updated_at = ? WHERE id = ?').bind(d.balance_cents, now, d.debt_id)
-  );
-  if (debtSync.length > 0) await db.batch(debtSync);
 
   const t = v.totals;
   return {
@@ -373,6 +379,13 @@ export async function writeSnapshot(db: Env['DB'], month: string, v: ValidatedSn
     },
     updatedAt: now,
   };
+}
+
+/** 负债主档余额同步语句（04 §4.2：保存快照时由服务端同步为最新月余额） */
+function debtSyncStmts(db: Env['DB'], v: ValidatedSnapshot, now: string) {
+  return v.debts.map((d) =>
+    db.prepare('UPDATE debts SET balance_cents = ?, updated_at = ? WHERE id = ?').bind(d.balance_cents, now, d.debt_id)
+  );
 }
 
 /** 明细多行 VALUES 单语句（控制 batch 语句数） */

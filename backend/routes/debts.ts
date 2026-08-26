@@ -12,7 +12,7 @@ import { conflict, invalidParam, notFound } from '../lib/errors';
 import { ok } from '../lib/http';
 import { centsToYuan, round4, yuanToCents } from '../lib/money';
 import { isValidMonth } from '../lib/month';
-import { boolField, intField, strField } from '../lib/validate';
+import { boolField, intField, strField, idParam } from '../lib/validate';
 import type { AppEnv } from '../middleware/auth';
 import { requireAdmin, requireAuth } from '../middleware/auth';
 import { getAllDebts, loadBundle } from '../services/snapshotRepo';
@@ -111,7 +111,7 @@ debts.post('/', requireAuth, requireAdmin, async (c) => {
 
 // §3.14 编辑负债（局部更新；固定/非固定切换不回改历史）
 debts.put('/:id', requireAuth, requireAdmin, async (c) => {
-  const id = Number(c.req.param('id'));
+  const id = idParam(c.req.param('id'));
   const existing = await c.env.DB.prepare('SELECT * FROM debts WHERE id = ?').bind(id).first<{
     id: number; name: string; debt_type: string; term: string; balance_cents: number; annual_rate: number;
     monthly_payment_cents: number; fixed_repayment: number; enabled: number; sort_order: number;
@@ -159,7 +159,7 @@ debts.put('/:id', requireAuth, requireAdmin, async (c) => {
 
 // §3.15 删除负债（有历史快照引用拒绝，保护历史勾稽）
 debts.delete('/:id', requireAuth, requireAdmin, async (c) => {
-  const id = Number(c.req.param('id'));
+  const id = idParam(c.req.param('id'));
   const existing = await c.env.DB.prepare('SELECT id FROM debts WHERE id = ?').bind(id).first();
   if (!existing) throw notFound('负债项不存在');
   const ref = await c.env.DB.prepare('SELECT COUNT(*) AS cnt FROM snapshot_debts WHERE debt_id = ?').bind(id).first<{ cnt: number }>();

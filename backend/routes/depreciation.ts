@@ -15,6 +15,7 @@
  * 权限：仅 admin。
  */
 import { Hono } from 'hono';
+import { idParam } from '../lib/validate';
 import { invalidParam, notFound } from '../lib/errors';
 import { ok } from '../lib/http';
 import type { AppEnv } from '../middleware/auth';
@@ -222,13 +223,27 @@ depreciation.post('/', requireAuth, requireAdmin, async (c) => {
   }
   const lifeMonths = typeof usefulLifeMonths === 'number' ? usefulLifeMonths : DEFAULT_LIFE_MONTHS[category];
   const minLife = MIN_LIFE_MONTHS[category];
+  const maxLife = MAX_LIFE_MONTHS[category];
   if (lifeMonths < minLife) {
     throw invalidParam(`${category} 最低折旧年限为 ${minLife} 个月（${minLife / 12} 年），当前设置 ${lifeMonths} 个月不满足要求`);
+  }
+  if (lifeMonths > maxLife) {
+    throw invalidParam(`${category} 最高折旧年限为 ${maxLife} 个月（${maxLife / 12} 年），当前设置 ${lifeMonths} 个月超限`);
   }
   const rate = typeof salvageRate === 'number' ? salvageRate : DEFAULT_SALVAGE_RATE[category];
 
   if (salvageMode !== 'rate' && salvageMode !== 'market') {
     throw invalidParam("salvageMode 须为 'rate' 或 'market'");
+  }
+
+  // CR-011：残值率 0~1（防残值 > 原值致可折旧额为负）；market 模式要求市值残值非负必填
+  if (salvageMode === 'rate' && (rate < 0 || rate > 1)) {
+    throw invalidParam('salvageRate 须在 0~1 之间（残值率=残值/原值）');
+  }
+  if (salvageMode === 'market') {
+    if (typeof marketSalvageValue !== 'number' || !Number.isFinite(marketSalvageValue) || marketSalvageValue < 0) {
+      throw invalidParam('market 模式要求 marketSalvageValue 为非负数字');
+    }
   }
 
   const normalizedDate = purchaseDate.length === 7 ? purchaseDate + '-01' : purchaseDate;
@@ -258,7 +273,7 @@ depreciation.post('/', requireAuth, requireAdmin, async (c) => {
 
 /** DELETE /depreciation/:id — 删除指定折旧记录 */
 depreciation.delete('/:id', requireAuth, requireAdmin, async (c) => {
-  const id = Number(c.req.param('id'));
+  const id = idParam(c.req.param('id'));
   if (!id || Number.isNaN(id)) throw invalidParam('id 须为数字');
   const row = await c.env.DB.prepare('SELECT id FROM asset_depreciation WHERE id = ?').bind(id).first();
   if (!row) throw notFound('折旧记录不存在');

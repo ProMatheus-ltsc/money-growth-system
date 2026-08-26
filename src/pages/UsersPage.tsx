@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useToast } from '@shared/core/hooks/useToast';
 import PasswordInput from '@shared/core/components/PasswordInput';
+import { ConfirmDialog } from '@shared/core/components/ConfirmDialog';
 import { api } from '../lib/api';
 import { isValidPassword, isValidUsername } from '../lib/validate';
 import { UserPlus, Trash2, Shield, Eye } from 'lucide-react';
@@ -21,6 +22,8 @@ export default function UsersPage() {
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [busy, setBusy] = useState(false);
+  // CR-024：删除二次确认统一 ConfirmDialog（原 window.confirm）
+  const [confirmDelete, setConfirmDelete] = useState<UserInfo | null>(null);
 
   const fetchUsers = useCallback(async () => {
     try {
@@ -64,8 +67,8 @@ export default function UsersPage() {
     }
   };
 
-  const handleDelete = async (u: UserInfo) => {
-    if (!confirm(`确定要删除用户 "${u.username}" 吗？此操作不可撤销。`)) return;
+  const doDelete = async (u: UserInfo) => {
+    setConfirmDelete(null);
     try {
       await api(`/api/auth/users/${u.id}`, { method: 'DELETE' });
       showToast(`用户 "${u.username}" 已删除`, 'success');
@@ -152,7 +155,7 @@ export default function UsersPage() {
               </div>
               {u.role !== 'admin' && (
                 <button
-                  onClick={() => void handleDelete(u)}
+                  onClick={() => setConfirmDelete(u)}
                   className="rounded-lg p-2 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-colors"
                   title="删除用户"
                 >
@@ -163,6 +166,16 @@ export default function UsersPage() {
           ))}
         </ul>
       </div>
+
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        title="删除用户"
+        message={confirmDelete ? `确定要删除用户 "${confirmDelete.username}" 吗？此操作不可撤销。` : ''}
+        confirmText="删除"
+        variant="danger"
+        onConfirm={() => { if (confirmDelete) void doDelete(confirmDelete); }}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   );
 }

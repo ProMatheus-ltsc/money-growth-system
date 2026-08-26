@@ -71,7 +71,11 @@ export interface BackupPayload {
   aiAnalyses: { analysisDate: string; assetMonth: string; payload: unknown }[];
 }
 
-/** 全库 → §3.26 导出结构（名称路径） */
+/**
+ * 全库 → §3.26 导出结构（名称路径）。
+ * CR-006：资产折旧/重估/或有负债/健康配置 4 张扩展表（migrations 0003~0007）暂不纳入备份
+ * （恢复后需在对应页面重新录入；UI 已提示）。纳入时须同步 restoreFromPayload 的清理与重建。
+ */
 export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> {
   const now = new Date().toISOString();
   const treeConfigs: BackupPayload['treeConfigs'] = [];
@@ -311,14 +315,24 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
     if (!treeKeys) errors.push({ field: `${sf}.treeConfigVersion`, message: `引用的资产树版本不存在：v${s.treeConfigVersion}` });
     const catKeys = catKeysByVersion.get(s.catConfigVersion);
     if (!catKeys) errors.push({ field: `${sf}.catConfigVersion`, message: `引用的分类版本不存在：v${s.catConfigVersion}` });
-    s.assets?.forEach((a, ai) => {
-      if (treeKeys && !treeKeys.has(a.nodeKey)) {
-        errors.push({ field: `${sf}.assets[${ai}].nodeKey`, message: '节点路径在资产树配置中不存在' });
-      }
-    });
+    // CR-023：assets 缺失必须显式报错（原可选链静默通过）
+    if (!Array.isArray(s.assets)) {
+      errors.push({ field: `${sf}.assets`, message: 'assets 数组缺失' });
+    } else {
+      s.assets.forEach((a, ai) => {
+        if (treeKeys && !treeKeys.has(a.nodeKey)) {
+          errors.push({ field: `${sf}.assets[${ai}].nodeKey`, message: '节点路径在资产树配置中不存在' });
+        }
+      });
+    }
     for (const dir of ['income', 'expense'] as const) {
       (s[dir] ?? []).forEach((x, xi) => {
         if (!catKeys) return;
+        // CR-023：cat 非字符串时不再抛异常（收集错误而非 500）
+        if (typeof x.cat !== 'string' || x.cat.length === 0) {
+          errors.push({ field: `${sf}.${dir}[${xi}].cat`, message: '分类路径缺失或非法' });
+          return;
+        }
         const parts = x.cat.split('>');
         const topOk = catKeys.has(`${dir}:${parts[0]}`);
         const leafOk = parts.length === 2 && catKeys.has(`${dir}:${parts[1]}`);
@@ -329,6 +343,10 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
     }
     s.largeItems?.forEach((li, li_i) => {
       if (!catKeys) return;
+      if (typeof li.cat !== 'string' || li.cat.length === 0) {
+        errors.push({ field: `${sf}.largeItems[${li_i}].cat`, message: '大额明细分类缺失或非法' });
+        return;
+      }
       const parts = li.cat.split('>');
       if (parts.length === 2 && !catKeys.has(`${li.direction}:${parts[1]}`)) {
         errors.push({ field: `${sf}.largeItems[${li_i}].cat`, message: `大额明细分类不存在：${li.cat}` });

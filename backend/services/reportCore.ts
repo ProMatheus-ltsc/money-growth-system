@@ -73,10 +73,11 @@ export function buildSankeyFromAmounts(
 
 export function buildSankey(b: SnapshotBundle) {
   const sums = catAmountByCat(b);
+  // CR-010：剔除 0 金额类别（原恒真条件失效已修正）
   const pick = (direction: 'income' | 'expense') =>
     topCats(b.catItems, direction)
       .map((c) => ({ cat: c.name, amountCents: sums.get(c.id) ?? 0 }))
-      .filter((c) => c.amountCents !== 0 || true);
+      .filter((c) => c.amountCents !== 0);
   return buildSankeyFromAmounts(pick('income'), pick('expense'));
 }
 

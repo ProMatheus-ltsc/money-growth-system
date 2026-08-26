@@ -44,7 +44,7 @@ export function clearToken(): void {
 export const UNAUTHORIZED_EVENT = 'fam:unauthorized';
 
 /** 这些端点的 401 不触发全局登出广播（避免登录流程内回环） */
-const NO_BROADCAST_PATHS = ['/api/auth/login', '/api/auth/init', '/api/auth/logout', '/api/auth/register'];
+const NO_BROADCAST_PATHS = ['/api/auth/login', '/api/auth/init', '/api/auth/logout'];
 
 interface ApiOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
