@@ -1,0 +1,24 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+build/
+*.tsbuildinfo
+
+# 本地环境与密钥（本项目无静态密钥，仅预防性忽略）
+.env
+.env.*
+!.env.example
+
+# wrangler 本地状态（本地 D1/R2 模拟数据、OAuth 缓存）
+.wrangler/
+
+# 日志与系统文件
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
+
+# 运行时大文件（core dump / step-agent 产物，勿入库）
+core-node-*
