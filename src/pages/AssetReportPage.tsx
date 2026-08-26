@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '@shared/core/hooks/useAuth';
+import { useAuth } from '../adapters/shared/useAuth';
 import { useToast } from '@shared/core/hooks/useToast';
 import { api, ApiError } from '../lib/api';
 import { fmtMoney, fmtRate, fmtSignedRate } from '../lib/format';

@@ -1,12 +1,15 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 
-// @shared/core 以 vendor 源码集成（04 §3.8）：
-// - '@shared/core'      → vendor/shared-core/src/index.ts（主入口）
-// - '@shared/core/<子路径>' → vendor/shared-core/src/<子路径>（逐模块子路径，与上游 exports 对齐）
-// Vite/esbuild 直接编译其 TS 源码；构建期零外网拉取。
-const vendorSrc = fileURLToPath(new URL('./vendor/shared-core/src', import.meta.url));
+// @shared/core 以 file: 依赖接入（RCA 模式，04 §3.8 V1.2）：
+// - package.json: "@shared/core": "file:../shared-core"（兄弟目录 junction/拷贝）
+// - vite alias '@shared/core' → ../shared-core/src（主入口）
+// - '@shared/core/<子路径>' 按上游 exports 映射；Vite/esbuild 直接编译其 TS 源码。
+// - echarts 子路径同样 alias 到本项目 node_modules（共享源码位于仓库外，无法向上解析）。
+// 构建依赖：父目录须存在 shared-core（本地 junction；CI 先 clone，仿 root-cause-analysis deploy.yml）。
+const vendorSrc = fileURLToPath(new URL('../shared-core/src', import.meta.url));
 
 export default defineConfig({
   plugins: [react()],
@@ -14,6 +17,7 @@ export default defineConfig({
     alias: [
       { find: /^@shared\/core$/, replacement: `${vendorSrc}/index.ts` },
       { find: /^@shared\/core\/(.+)$/, replacement: `${vendorSrc}/$1` },
+      { find: /^echarts\/(core|charts|components|renderers)$/, replacement: path.resolve(__dirname, 'node_modules/echarts/$1') },
     ],
   },
   server: {

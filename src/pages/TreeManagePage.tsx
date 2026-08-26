@@ -5,7 +5,7 @@
  * - 保留：拖拽排序、启停、删除、升级分组、保存新版本等核心功能
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useAuth } from '@shared/core/hooks/useAuth';
+import { useAuth } from '../adapters/shared/useAuth';
 import { ConfirmDialog } from '@shared/core/components/ConfirmDialog';
 import { LoadingSpinner } from '@shared/core/components/LoadingSpinner';
 import { useToast } from '@shared/core/hooks/useToast';

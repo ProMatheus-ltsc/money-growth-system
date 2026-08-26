@@ -12,6 +12,7 @@
     "db:migrate:local": "wrangler d1 migrations apply fam-asset-db --local"
   },
   "dependencies": {
+    "@shared/core": "file:../shared-core",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
     "echarts": "^5.5.1",

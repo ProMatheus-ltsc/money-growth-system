@@ -19,16 +19,20 @@
     "types": ["vite/client"],
     "baseUrl": ".",
     "paths": {
-      "@shared/core": ["./vendor/shared-core/src/index.ts"],
-      "@shared/core/*": ["./vendor/shared-core/src/*"]
+      "@shared/core": ["../shared-core/src/index.ts"],
+      "@shared/core/*": ["../shared-core/src/*"],
+      "react": ["./node_modules/@types/react"],
+      "react-dom": ["./node_modules/@types/react-dom"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime"],
+      "echarts/core": ["./node_modules/echarts/core"],
+      "echarts/charts": ["./node_modules/echarts/charts"],
+      "echarts/components": ["./node_modules/echarts/components"],
+      "echarts/renderers": ["./node_modules/echarts/renderers"]
     }
   },
-  "include": ["src", "vite.config.ts", "vendor/shared-core/src"],
+  "include": ["src", "vite.config.ts"],
   "exclude": [
     "node_modules",
-    "dist",
-    "vendor/shared-core/src/components/visualize/CausalGraph.tsx",
-    "vendor/shared-core/src/components/stats/RootCauseTypePie.tsx",
-    "vendor/shared-core/src/hooks/useSearch.ts"
+    "dist"
   ]
 }

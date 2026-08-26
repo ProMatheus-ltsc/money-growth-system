@@ -7,7 +7,7 @@
  */
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '@shared/core/hooks/useAuth';
+import { useAuth } from '../adapters/shared/useAuth';
 import { useToast } from '@shared/core/hooks/useToast';
 import PasswordInput from '@shared/core/components/PasswordInput';
 import { LoadingSpinner } from '@shared/core/components/LoadingSpinner';

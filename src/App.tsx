@@ -11,11 +11,11 @@
  */
 import { lazy, Suspense, useEffect } from 'react';
 import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom';
-import { AuthProvider, useAuth } from '@shared/core/hooks/useAuth';
+import { AuthProvider, useAuth } from './adapters/shared/useAuth';
 import { ToastProvider, useToast } from '@shared/core/hooks/useToast';
 import { ToastContainer } from '@shared/core/components/Toast';
-import { ProtectedRoute } from '@shared/core/components/ProtectedRoute';
-import { Layout, type NavGroup } from '@shared/core/components/Layout';
+import { ProtectedRoute } from './adapters/shared/ProtectedRoute';
+import { Layout, type NavGroup } from './adapters/shared/Layout';
 import { LoadingSpinner } from '@shared/core/components/LoadingSpinner';
 import {
   Activity,

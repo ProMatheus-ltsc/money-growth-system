@@ -30,3 +30,6 @@ vite.config.ts.timestamp-*
 # vite 构建临时文件
 vite.config.ts.timestamp-*
 *.timestamp-*.mjs
+
+# 已废弃的 vendor 目录（file: 接入模式弃用，遗留待清理）
+vendor/

@@ -6,7 +6,7 @@
  */
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useAuth } from '@shared/core/hooks/useAuth';
+import { useAuth } from '../adapters/shared/useAuth';
 import { useToast } from '@shared/core/hooks/useToast';
 import { Download } from 'lucide-react';
 import { api, ApiError } from '../lib/api';

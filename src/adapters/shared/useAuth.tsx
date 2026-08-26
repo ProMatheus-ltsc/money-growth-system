@@ -10,9 +10,9 @@
  *   （首次初始化完成后刷新状态机进入 login）。
  */
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import type { Account } from '../types';
-import { setCurrentAccountId, listAccounts, getDBPrefix } from '../services/db';
-import { registerAccount, verifyAccountPassword, resetAccountPassword } from '../services/auth';
+import type { Account } from '@shared/core/types';
+import { setCurrentAccountId, listAccounts, getDBPrefix } from '@shared/core/services/db';
+import { registerAccount, verifyAccountPassword, resetAccountPassword } from '@shared/core/services/auth';
 
 type AuthState = 'loading' | 'firstTime' | 'login' | 'authenticated';
 

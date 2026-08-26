@@ -8,7 +8,7 @@
  * - 跨期对比：勾选 A/B → 并排指标（绝对差 + 百分比 + 方向）+ 模块对比图 + 逐模块差异表（高亮变动行）
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useAuth } from '@shared/core/hooks/useAuth';
+import { useAuth } from '../adapters/shared/useAuth';
 import { useToast } from '@shared/core/hooks/useToast';
 import { ArrowLeft, Download, Lock } from 'lucide-react';
 import { api, ApiError } from '../lib/api';

@@ -9,7 +9,7 @@
  *  - login：POST /api/auth/login（签发 token 本地保存）
  *  - logout：POST /api/auth/logout（幂等；失败吞掉）
  */
-import type { AuthDriver, AuthDriverAccount } from '@shared/core/hooks/useAuth';
+import type { AuthDriver, AuthDriverAccount } from '../shared/useAuth';
 import { api, clearToken, getToken, setToken } from '../../lib/api';
 
 interface MeData {

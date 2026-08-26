@@ -11,7 +11,7 @@
  * 剥离内容：isInvestmentTemplate 与全部投资徽标逻辑（buy/sell/position 相关函数）；
  * 阶段徽标配色改为 phaseBadgeColor props 注入（默认按阶段 id 哈希轮换三色，避免业务阶段名耦合）。
  */
-import type { FormRecord } from '../types';
+import type { FormRecord } from '@shared/core/types';
 import { format } from 'date-fns';
 
 /** 阶段进度信息：phaseInfo 回调的返回值 */

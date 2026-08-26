@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useToast } from '@shared/core/hooks/useToast';
 import { ConfirmDialog } from '@shared/core/components/ConfirmDialog';
-import RecordList from '@shared/core/components/RecordList';
+import RecordList from '../adapters/shared/RecordList';
 import type { FormRecord } from '@shared/core/types';
 import { Copy, Sparkles, Upload } from 'lucide-react';
 import { api, ApiError } from '../lib/api';

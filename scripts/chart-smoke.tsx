@@ -1,10 +1,10 @@
 import { renderToString } from 'react-dom/server';
-import { FinanceStackedArea } from '../vendor/shared-core/src/components/visualize/finance/FinanceStackedArea';
-import { FinanceTreemap } from '../vendor/shared-core/src/components/visualize/finance/FinanceTreemap';
-import { FinanceSankey } from '../vendor/shared-core/src/components/visualize/finance/FinanceSankey';
-import { FinanceWaterfall } from '../vendor/shared-core/src/components/visualize/finance/FinanceWaterfall';
-import { FinanceCompareBar } from '../vendor/shared-core/src/components/visualize/finance/FinanceCompareBar';
-import { FinanceDonut } from '../vendor/shared-core/src/components/visualize/finance/FinanceDonut';
+import { FinanceStackedArea } from '@shared/core/components/visualize/finance/FinanceStackedArea';
+import { FinanceTreemap } from '@shared/core/components/visualize/finance/FinanceTreemap';
+import { FinanceSankey } from '@shared/core/components/visualize/finance/FinanceSankey';
+import { FinanceWaterfall } from '@shared/core/components/visualize/finance/FinanceWaterfall';
+import { FinanceCompareBar } from '@shared/core/components/visualize/finance/FinanceCompareBar';
+import { FinanceDonut } from '@shared/core/components/visualize/finance/FinanceDonut';
 
 let pass=0, fail=0;
 const chk=(n:string,fn:()=>string)=>{try{fn();pass++;console.log('  ✓ '+n);}catch(e){fail++;console.log('  ✗ '+n+': '+(e as Error).message);}};
