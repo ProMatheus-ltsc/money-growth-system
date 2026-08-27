@@ -78,9 +78,16 @@ health.get('/', requireAuth, async (c) => {
           : savingsRate >= 0.1 ? 'warning' : 'danger';
 
   // --- 2. 偿债比率 = 每月还款总额 / 月收入 ---
-  const monthlyRepayment = bundle.debtsMaster
-    .filter((d) => d.enabled === 1)
-    .reduce((s, d) => s + d.monthly_payment_cents, 0);
+  // 优先使用当月快照中的实际还款额，fallback 到负债主表的固定月还款额
+  let monthlyRepayment = 0;
+  for (const d of bundle.debtsMaster.filter((d) => d.enabled === 1)) {
+    const snap = bundle.debtsSnap.find((s) => s.debt_id === d.id);
+    if (snap && snap.repayment_cents > 0) {
+      monthlyRepayment += snap.repayment_cents;
+    } else if (d.monthly_payment_cents > 0) {
+      monthlyRepayment += d.monthly_payment_cents;
+    }
+  }
   const debtServiceRatio = totalIncome > 0 ? round4(monthlyRepayment / totalIncome) : null;
   const debtServiceStatus: HealthRatio['status'] =
     debtServiceRatio === null ? 'warning'
