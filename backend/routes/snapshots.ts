@@ -28,8 +28,8 @@ import { effectiveFreq, FREQ_INTERVAL, topAncestor, topLevelModules } from '../s
 
 const snapshots = new Hono<AppEnv>();
 
-// §3.7 月度快照列表（趋势聚合）
-snapshots.get('/', requireAuth, requireAdmin, async (c) => {
+// §3.7 月度快照列表（趋势聚合）— admin + viewer 均可读
+snapshots.get('/', requireAuth, async (c) => {
   const range = c.req.query('range') ?? '12m';
   const year = c.req.query('year') ?? null;
   if (range !== '12m' && range !== 'year' && range !== 'all') {
@@ -76,7 +76,7 @@ snapshots.get('/', requireAuth, requireAdmin, async (c) => {
 });
 
 // §3.8 单月快照详情
-snapshots.get('/:month', requireAuth, requireAdmin, async (c) => {
+snapshots.get('/:month', requireAuth, async (c) => {
   const month = c.req.param('month');
   if (!isValidMonth(month)) throw invalidParam('month 格式应为 YYYY-MM');
 
