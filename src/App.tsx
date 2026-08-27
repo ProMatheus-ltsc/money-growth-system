@@ -87,7 +87,7 @@ function RoleRoute({ children }: { children: React.ReactNode }) {
 /** 根据角色决定默认首页：admin → 仪表盘，viewer → 资产报表 */
 function DefaultRedirect() {
   const { role } = useAuth();
-  return <Navigate to={role === 'viewer' ? '/reports/assets' : '/'} replace />;
+  return <Navigate to={role === 'viewer' ? '/reports/assets' : '/dashboard'} replace />;
 }
 
 function NotFoundRedirect() {
@@ -96,11 +96,11 @@ function NotFoundRedirect() {
 
 /** 登录页门控：已认证用户访问 /login 时自动跳转回首页 */
 function LoginGate() {
-  const { state } = useAuth();
+  const { state, role } = useAuth();
   const navigate = useNavigate();
   useEffect(() => {
-    if (state === 'authenticated') navigate('/', { replace: true });
-  }, [state, navigate]);
+    if (state === 'authenticated') navigate(role === 'viewer' ? '/reports/assets' : '/dashboard', { replace: true });
+  }, [state, role, navigate]);
   return <LoginPage />;
 }
 
@@ -111,7 +111,7 @@ const ADMIN_NAV_GROUPS: NavGroup[] = [
     label: '概览',
     icon: Home,
     children: [
-      { to: '/', icon: TrendingUp, label: '仪表盘', end: true },
+      { to: '/dashboard', icon: TrendingUp, label: '仪表盘', end: true },
     ],
   },
   {
@@ -149,7 +149,7 @@ const ADMIN_NAV_GROUPS: NavGroup[] = [
   },
 ];
 
-/** 只读用户侧边栏导航配置：仅包含数据分析（报表查看） */
+/** 只读用户侧边栏导航配置：数据分析（报表 + 财务健康 + AI 分析） */
 const VIEWER_NAV_GROUPS: NavGroup[] = [
   {
     key: 'analysis',
@@ -159,6 +159,8 @@ const VIEWER_NAV_GROUPS: NavGroup[] = [
       { to: '/reports/assets', icon: FileBarChart2, label: '资产报表' },
       { to: '/reports/finance', icon: FileSpreadsheet, label: '财务报表' },
       { to: '/reports/snapshots', icon: FileClock, label: '报告快照' },
+      { to: '/health', icon: Activity, label: '财务健康' },
+      { to: '/ai', icon: Sparkles, label: 'AI 分析' },
     ],
   },
 ];
@@ -193,7 +195,8 @@ function AppRoutes() {
             <AppShell>
               <Suspense fallback={<PageFallback />}>
                 <Routes>
-                  <Route path="/" element={<DashboardPage />} />
+                  <Route path="/" element={<DefaultRedirect />} />
+                  <Route path="/dashboard" element={<RoleRoute><DashboardPage /></RoleRoute>} />
                   <Route path="/entry" element={<RoleRoute><EntryPage /></RoleRoute>} />
                   <Route path="/debts" element={<RoleRoute><DebtsPage /></RoleRoute>} />
                   <Route path="/reports/assets" element={<AssetReportPage />} />
@@ -202,7 +205,7 @@ function AppRoutes() {
                   <Route path="/physical-assets" element={<RoleRoute><PhysicalAssetsPage /></RoleRoute>} />
                   <Route path="/settings/tree" element={<RoleRoute><TreeManagePage /></RoleRoute>} />
                   <Route path="/settings/categories" element={<RoleRoute><CatManagePage /></RoleRoute>} />
-                  <Route path="/ai" element={<RoleRoute><AiPage /></RoleRoute>} />
+                  <Route path="/ai" element={<AiPage />} />
                   <Route path="/settings/users" element={<RoleRoute><UsersPage /></RoleRoute>} />
                   <Route path="/settings/backup" element={<RoleRoute><BackupPage /></RoleRoute>} />
                   <Route path="/health" element={<HealthPage />} />
