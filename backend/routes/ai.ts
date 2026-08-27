@@ -122,8 +122,8 @@ ai.post('/analyses', requireAuth, requireAdmin, async (c) => {
   return ok(c, { id: Number(res.meta.last_row_id), analysisDate, assetMonth });
 });
 
-// §3.30 AI 分析历史
-ai.get('/analyses', requireAuth, requireAdmin, async (c) => {
+// §3.30 AI 分析历史 — admin + viewer 均可读
+ai.get('/analyses', requireAuth, async (c) => {
   const month = c.req.query('month');
   if (month && !isValidMonth(month)) throw invalidParam('month 格式应为 YYYY-MM');
   const sql = month
