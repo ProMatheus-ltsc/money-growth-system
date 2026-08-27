@@ -46,23 +46,26 @@ export default function AssetReportPage() {
   const [error, setError] = useState<ApiError | null>(null);
   const [drill, setDrill] = useState<Drill>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [availableMonths, setAvailableMonths] = useState<string[]>([]);
   // 趋势图点击月份 → 联动切换后自动下钻该月模块构成（F-04 规则 1）
   const pendingDrillMonth = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    setDrill(null); // 月份/报表重绘时旧下钻面板自动清除（02 §3.2）
+    setDrill(null);
     try {
-      const [res, tree] = await Promise.all([
+      const [res, tree, list] = await Promise.all([
         api<AssetReportData>('/api/reports/assets', {
           query: { month, range, ...(range === 'year' ? { year } : {}) },
         }),
         api<TreeConfig>('/api/tree').catch(() => null),
+        api<{ months: { month: string }[] }>('/api/snapshots', { query: { range: 'all' } }).catch(() => ({ months: [] })),
       ]);
       setTreeConfig(tree);
       setData(res);
-      // 若当前选中月不在趋势序列中（如切换范围后），对齐到序列末月
+      const ms = list.months.map((m) => m.month);
+      if (ms.length > 0) setAvailableMonths(ms);
       if (res.trend.months.length > 0 && !res.trend.months.includes(month)) {
         setMonth(res.trend.months[res.trend.months.length - 1]);
       } else if (pendingDrillMonth.current === month) {
@@ -73,6 +76,9 @@ export default function AssetReportPage() {
       const ae = e as ApiError;
       setError(ae);
       setData(null);
+      const list = await api<{ months: { month: string }[] }>('/api/snapshots', { query: { range: 'all' } }).catch(() => ({ months: [] }));
+      const ms = list.months.map((m) => m.month);
+      if (ms.length > 0) setAvailableMonths(ms);
     } finally {
       setLoading(false);
     }
@@ -191,11 +197,12 @@ export default function AssetReportPage() {
     return buildSankeyPaletteMap(data.sankey.income.map((i) => i.cat), data.sankey.expense.map((e) => e.cat));
   }, [data]);
 
-  // 无快照空态
   if (!loading && error?.status === 404) {
     return (
       <div className="space-y-4">
-        <Header />
+        <Header>
+          {availableMonths.length > 0 && <MonthPicker months={availableMonths} value={month} onChange={setMonth} />}
+        </Header>
         <EmptyState
           title={`${month} 尚无资产快照`}
           description={role === 'viewer' ? '等待管理员录入本月数据后即可查看报表。' : '请先在「月末录入」页完成本月录入，再回来查看报表。'}
