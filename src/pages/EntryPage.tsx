@@ -447,19 +447,25 @@ export default function EntryPage() {
   };
 
   const handleSave = async () => {
-    if (!editable) return;
+    console.log('[HS] step1 editable=', editable, 'mode=', mode, 'saving=', saving);
+    if (!editable) { console.log('[HS] EXIT: not editable'); return; }
     const errs = validateLocal();
+    console.log('[HS] step2 errs=', errs.length, errs[0] || 'none');
     if (errs.length > 0) {
       showToast(errs[0], 'error', 5000);
       return;
     }
     if (mode === 'history-correct') {
+      console.log('[HS] EXIT: history-correct');
       setCorrecting(true);
       return;
     }
     const payload = buildPayload();
-    if (!payload) return;
+    console.log('[HS] step3 payload=', !!payload);
+    if (!payload) { console.log('[HS] EXIT: payload null'); return; }
+    console.log('[HS] step4 CALLING API PUT /api/snapshots/' + month);
     setSaving(true);
+
     try {
       const res = await api<{ totals: Record<string, number> }>(`/api/snapshots/${month}`, { method: 'PUT', body: payload });
       clearDraft(month);
