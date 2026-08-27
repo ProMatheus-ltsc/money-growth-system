@@ -177,12 +177,12 @@ health.get('/', requireAuth, async (c) => {
     return { module: m.name, amount: centsToYuan(amt), ratio, warning: ratio >= concentrationThreshold };
   }).sort((a, b) => b.ratio - a.ratio);
 
-  // --- 7. 流动性结构 ---
+  // --- 7. 流动性结构（按叶子节点各自 liquidity 分配金额） ---
   const liquidityMap = new Map<'high' | 'medium' | 'low', number>();
-  for (const m of modules) {
-    const liq = nodeLiquidity(m);
-    const amt = moduleSumCents(bundle, m.id);
-    liquidityMap.set(liq, (liquidityMap.get(liq) ?? 0) + amt);
+  for (const a of bundle.assets) {
+    const node = bundle.treeNodes.find((n) => n.id === a.node_id);
+    const liq = node ? nodeLiquidity(node) : 'medium';
+    liquidityMap.set(liq, (liquidityMap.get(liq) ?? 0) + a.balance_cents);
   }
   const liquidityLabels: Record<string, string> = { high: '高流动性（随时变现）', medium: '中流动性（短期可变现）', low: '低流动性（长期锁定）' };
   const liquidityBreakdown: LiquidityBreakdown[] = (['high', 'medium', 'low'] as const).map((level) => {
