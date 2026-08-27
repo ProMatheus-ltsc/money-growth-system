@@ -232,10 +232,24 @@ snapshots.put('/:month', requireAuth, requireAdmin, async (c) => {
   }
   if (errors.length > 0) throw invalidParam('快照校验失败', errors);
 
-  const validated = await validateSnapshotInput(c.env.DB, month, body, errors);
+  let validated;
+  try {
+    validated = await validateSnapshotInput(c.env.DB, month, body, errors);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[snapshots PUT] validateSnapshotInput failed:', msg, e);
+    throw invalidParam(`校验快照输入时出错：${msg}`);
+  }
   if (!validated || errors.length > 0) throw invalidParam('快照校验失败', errors);
 
-  const result = await writeSnapshot(c.env.DB, month, validated);
+  let result;
+  try {
+    result = await writeSnapshot(c.env.DB, month, validated);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error('[snapshots PUT] writeSnapshot failed:', msg, e);
+    throw invalidParam(`写入快照时出错：${msg}`);
+  }
   return ok(c, result);
 });
 
