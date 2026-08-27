@@ -69,6 +69,9 @@ export default function FinanceReportPage() {
     } catch (e) {
       setData(null);
       setError(e as ApiError);
+      const list = await api<{ months: { month: string }[] }>('/api/snapshots', { query: { range: 'all' } }).catch(() => ({ months: [] }));
+      const ms = list.months.map((m) => m.month);
+      if (ms.length > 0) setMonths(ms);
     } finally {
       setLoading(false);
     }
@@ -93,7 +96,9 @@ export default function FinanceReportPage() {
   if (!loading && error?.status === 404) {
     return (
       <div className="space-y-4">
-        <PageHeader />
+        <PageHeader>
+          {months.length > 0 && <MonthPicker months={months} value={month} onChange={setMonth} />}
+        </PageHeader>
         <EmptyState
           title={`${month} 尚无资产快照`}
           description={role === 'viewer' ? '等待管理员录入本月数据后即可查看财务报表。' : '请先在「月末录入」页完成本月录入。'}
