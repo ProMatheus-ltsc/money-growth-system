@@ -388,8 +388,8 @@ function debtSyncStmts(db: Env['DB'], v: ValidatedSnapshot, now: string) {
   );
 }
 
-/** D1/SQLite 单条语句最多绑定变量数（保守值，官方上限 999） */
-const MAX_BIND_VARS = 900;
+/** D1 每条查询最多 100 个绑定参数（Cloudflare 官方限制） */
+const MAX_BIND_VARS = 100;
 
 /** 将大数组按 cols 列数拆分为多条 INSERT，每条不超过 MAX_BIND_VARS 个绑定变量 */
 function chunkedInsert<T>(
