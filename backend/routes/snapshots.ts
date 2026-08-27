@@ -204,7 +204,6 @@ snapshots.put('/:month', requireAuth, requireAdmin, async (c) => {
   if (!isValidMonth(month)) throw invalidParam('month 格式应为 YYYY-MM');
   const cur = serverCurrentMonth();
   if (month > cur) throw invalidParam('不能保存未来月份的快照');
-  if (month < cur) throw historyLocked();
 
   const body = asObject(await c.req.json().catch(() => null));
   if (!body) throw invalidParam('请求体必须为 JSON 对象');
