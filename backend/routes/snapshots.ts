@@ -202,12 +202,18 @@ snapshots.get('/:month', requireAuth, requireAdmin, async (c) => {
 snapshots.put('/:month', requireAuth, requireAdmin, async (c) => {
   const month = c.req.param('month');
   if (!isValidMonth(month)) throw invalidParam('month 格式应为 YYYY-MM');
-  const cur = serverCurrentMonth();
-  if (month > cur) throw invalidParam('不能保存未来月份的快照');
+  let cur: string;
+  try {
+    cur = serverCurrentMonth();
+  } catch (e) {
+    console.error('[snapshots PUT] serverCurrentMonth() failed:', e);
+    throw invalidParam('服务端无法确定当前月份（内部错误）');
+  }
+  if (month > cur) throw invalidParam(`不能保存未来月份的快照（当前月=${cur}）`);
   // 历史月已有快照 → 必须走纠错流程，不允许直接覆盖
   if (month < cur) {
-  const existing = await c.env.DB.prepare('SELECT id FROM monthly_snapshots WHERE month = ?').bind(month).first();
-  if (existing) throw historyLocked();
+    const existing = await c.env.DB.prepare('SELECT id FROM monthly_snapshots WHERE month = ?').bind(month).first();
+    if (existing) throw historyLocked();
   }
 
   const body = asObject(await c.req.json().catch(() => null));
