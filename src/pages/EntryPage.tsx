@@ -76,6 +76,7 @@ export default function EntryPage() {
   const [saved, setSaved] = useState(false);
   const [draftSaved, setDraftSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [invalidFields, setInvalidFields] = useState<Set<string>>(new Set());
   const [correcting, setCorrecting] = useState(false); // 纠错弹窗开
   const [catDialogOpen, setCatDialogOpen] = useState(false);
   const [largeDialog, setLargeDialog] = useState<{ direction: 'income' | 'expense'; catItemId: number } | null>(null);
@@ -412,6 +413,7 @@ export default function EntryPage() {
 
   const validateLocal = (): string[] => {
     const errs: string[] = [];
+    const badFields = new Set<string>();
     const nodeName = (id: number) => nodes.find((n) => n.id === id)?.name ?? `资产项`;
     for (const id of leafSet) {
       const node = nodes.find((n) => n.id === id);
@@ -426,21 +428,34 @@ export default function EntryPage() {
       if (v.trim() !== '' && !isValidSignedAmount(v)) errs.push(`「${nodeName(Number(k))}」收益金额格式有误，请填写数字（可正可负，最多两位小数）`);
     }
     const validCatIds = new Set<number>();
+    const catNameMap = new Map<number, string>();
     if (catConfig) {
       for (const dir of ['income', 'expense'] as const) {
         for (const top of catConfig[dir]) {
           validCatIds.add(top.id);
-          for (const child of top.children ?? []) validCatIds.add(child.id);
+          catNameMap.set(top.id, top.name);
+          for (const child of top.children ?? []) {
+            validCatIds.add(child.id);
+            catNameMap.set(child.id, `${top.name}/${child.name}`);
+          }
         }
       }
     }
     for (const [k, v] of Object.entries(form.income)) {
-      if (!validCatIds.has(Number(k))) continue;
-      if (v.trim() !== '' && !isValidAmount(v)) errs.push(`收入金额请填写非负数`);
+      const catId = Number(k);
+      if (!validCatIds.has(catId)) continue;
+      if (v.trim() !== '' && !isValidAmount(v)) {
+        badFields.add(`income:${catId}`);
+        errs.push(`收入「${catNameMap.get(catId) ?? catId}」金额格式有误（输入: "${v}"），请填写非负数`);
+      }
     }
     for (const [k, v] of Object.entries(form.expense)) {
-      if (!validCatIds.has(Number(k))) continue;
-      if (v.trim() !== '' && !isValidAmount(v)) errs.push(`支出金额请填写非负数`);
+      const catId = Number(k);
+      if (!validCatIds.has(catId)) continue;
+      if (v.trim() !== '' && !isValidAmount(v)) {
+        badFields.add(`expense:${catId}`);
+        errs.push(`支出「${catNameMap.get(catId) ?? catId}」金额格式有误（输入: "${v}"），请填写非负数`);
+      }
     }
     const threshold = catConfig?.threshold ?? 200;
     form.largeItems.forEach((li, i) => {
@@ -453,6 +468,7 @@ export default function EntryPage() {
       if (!e || !isValidAmount(e.balance)) errs.push(`「${d.name}」当前余额请填写非负数`);
       if (!d.fixedRepayment && (!e || !isValidAmount(e.repayment))) errs.push(`「${d.name}」本月还款额请填写（非固定还款需每月录入）`);
     }
+    setInvalidFields(badFields);
     return errs;
   };
 
@@ -465,6 +481,7 @@ export default function EntryPage() {
       return;
     }
     setSaveError(null);
+    setInvalidFields(new Set());
     if (mode === 'history-correct') {
       setCorrecting(true);
       return;
@@ -689,6 +706,7 @@ export default function EntryPage() {
                     catConfig={catConfig}
                     form={form}
                     expandedCats={expandedCats}
+                    invalidFields={invalidFields}
                     toggleCat={(id) =>
                       setExpandedCats((s) => {
                         const n2 = new Set(s);
@@ -1044,6 +1062,7 @@ function CategoryBlock(props: {
   catConfig: CatConfig;
   form: FormState;
   expandedCats: Set<number>;
+  invalidFields: Set<string>;
   toggleCat: (id: number) => void;
   patchCat: (direction: 'income' | 'expense', catItemId: number, value: string) => void;
   onAddLarge: (catItemId: number) => void;
@@ -1084,17 +1103,19 @@ function CategoryBlock(props: {
                   const largeRows = form.largeItems
                     .map((li, idx) => ({ li, idx }))
                     .filter(({ li }) => li.direction === direction && li.catItemId === c.id);
+                  const isInvalid = props.invalidFields.has(`${direction}:${c.id}`);
                   return (
                     <div key={c.id}>
                       <div className="flex items-center gap-2 pl-5">
-                        <span className="flex-1 text-xs text-slate-500">{c.name}</span>
+                        <span className={`flex-1 text-xs ${isInvalid ? 'font-medium text-red-600' : 'text-slate-500'}`}>{c.name}</span>
                         <input
                           value={amounts[c.id] ?? ''}
                           onChange={(e) => props.patchCat(direction, c.id, e.target.value)}
                           placeholder="0.00"
                           inputMode="decimal"
-                          className="w-28 rounded border border-slate-200 px-2 py-1 text-right text-xs outline-none focus:border-blue-400"
+                          className={`w-28 rounded border px-2 py-1 text-right text-xs outline-none ${isInvalid ? 'border-red-500 bg-red-50 ring-1 ring-red-300 focus:border-red-500' : 'border-slate-200 focus:border-blue-400'}`}
                           aria-label={`${top.name} ${c.name} 金额`}
+                          aria-invalid={isInvalid}
                         />
                         <button
                           onClick={() => props.onAddLarge(c.id)}
