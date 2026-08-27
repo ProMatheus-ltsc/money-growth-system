@@ -26,6 +26,9 @@ export const MODULE_PALETTE = [
 /** 收入类别色板（CVD友好，5色） */
 export const INCOME_PALETTE = ['#3182ce', '#38a169', '#d69e2e', '#805ad5', '#dd6b20'];
 
+/** 支出类别色板（暖色系，与收入色板区分） */
+export const EXPENSE_PALETTE = ['#e53e3e', '#d69e2e', '#dd6b20', '#b83280', '#718096', '#975a16', '#2b6cb0'];
+
 /** 流向色（02 视觉基线）：流入/结余 绿、流出 灰、减少 红 */
 export const FLOW_COLORS = {
   in: '#10b981',
@@ -38,15 +41,15 @@ export const TERM_COLORS = { short: '#f59e0b', long: '#3b82f6' };
 
 /**
  * 桑基流向配色映射：收入类别彩色（INCOME_PALETTE 顺序）、
- * 支出类别灰（流出灰）、「总收入」深墨、「结余/净储蓄」绿（02 §3 ③）。
+ * 支出类别各自独立颜色（EXPENSE_PALETTE 顺序）、「总收入」深墨、「结余/净储蓄」绿。
  */
 export function buildSankeyPaletteMap(incomeCats: string[], expenseCats: string[]): Record<string, string> {
   const map: Record<string, string> = {};
   incomeCats.forEach((c, i) => {
     map[c] = INCOME_PALETTE[i % INCOME_PALETTE.length];
   });
-  expenseCats.forEach((c) => {
-    map[c] = FLOW_COLORS.out;
+  expenseCats.forEach((c, i) => {
+    map[c] = EXPENSE_PALETTE[i % EXPENSE_PALETTE.length];
   });
   map['总收入'] = '#334155';
   map['结余/净储蓄'] = FLOW_COLORS.in;
