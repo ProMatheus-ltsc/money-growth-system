@@ -75,6 +75,7 @@ export default function EntryPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [draftSaved, setDraftSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [correcting, setCorrecting] = useState(false); // 纠错弹窗开
   const [catDialogOpen, setCatDialogOpen] = useState(false);
   const [largeDialog, setLargeDialog] = useState<{ direction: 'income' | 'expense'; catItemId: number } | null>(null);
@@ -129,8 +130,6 @@ export default function EntryPage() {
       const cur = currentMonth();
       let m: Mode;
       if (compareMonth(month, cur) > 0) m = 'future';
-      // CR-020/026：有快照优先（历史月有快照 → history-locked/current-overwrite，纠错入口可达）；
-      // 仅「历史月且无快照」才置 no-snapshot-past 只读提示
       else if (detailRes.exists) m = detailRes.locked ? 'history-locked' : 'current-overwrite';
       else m = 'current-new';
       setMode(m);
@@ -426,10 +425,21 @@ export default function EntryPage() {
     for (const [k, v] of Object.entries(form.gains)) {
       if (v.trim() !== '' && !isValidSignedAmount(v)) errs.push(`「${nodeName(Number(k))}」收益金额格式有误，请填写数字（可正可负，最多两位小数）`);
     }
-    for (const [, v] of Object.entries(form.income)) {
+    const validCatIds = new Set<number>();
+    if (catConfig) {
+      for (const dir of ['income', 'expense'] as const) {
+        for (const top of catConfig[dir]) {
+          validCatIds.add(top.id);
+          for (const child of top.children ?? []) validCatIds.add(child.id);
+        }
+      }
+    }
+    for (const [k, v] of Object.entries(form.income)) {
+      if (!validCatIds.has(Number(k))) continue;
       if (v.trim() !== '' && !isValidAmount(v)) errs.push(`收入金额请填写非负数`);
     }
-    for (const [, v] of Object.entries(form.expense)) {
+    for (const [k, v] of Object.entries(form.expense)) {
+      if (!validCatIds.has(Number(k))) continue;
       if (v.trim() !== '' && !isValidAmount(v)) errs.push(`支出金额请填写非负数`);
     }
     const threshold = catConfig?.threshold ?? 200;
@@ -447,25 +457,21 @@ export default function EntryPage() {
   };
 
   const handleSave = async () => {
-    console.log('[HS] step1 editable=', editable, 'mode=', mode, 'saving=', saving);
-    if (!editable) { console.log('[HS] EXIT: not editable'); return; }
+    if (!editable) return;
     const errs = validateLocal();
-    console.log('[HS] step2 errs=', errs.length, errs[0] || 'none');
     if (errs.length > 0) {
+      setSaveError(errs[0]);
       showToast(errs[0], 'error', 5000);
       return;
     }
+    setSaveError(null);
     if (mode === 'history-correct') {
-      console.log('[HS] EXIT: history-correct');
       setCorrecting(true);
       return;
     }
     const payload = buildPayload();
-    console.log('[HS] step3 payload=', !!payload);
-    if (!payload) { console.log('[HS] EXIT: payload null'); return; }
-    console.log('[HS] step4 CALLING API PUT /api/snapshots/' + month);
+    if (!payload) return;
     setSaving(true);
-
     try {
       const res = await api<{ totals: Record<string, number> }>(`/api/snapshots/${month}`, { method: 'PUT', body: payload });
       clearDraft(month);
@@ -772,6 +778,9 @@ export default function EntryPage() {
                 {saving ? '保存中…' : saved ? '✓ 已保存' : mode === 'history-correct' ? '提交纠错' : '保存本月快照'}
               </button>
             </div>
+            {saveError && (
+              <p className="mt-2 text-xs font-medium text-red-600">⚠ {saveError}</p>
+            )}
           </div>
         </>
       )}
