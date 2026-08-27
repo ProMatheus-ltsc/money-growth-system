@@ -6,22 +6,23 @@ import { isEmptyValue } from '@shared/core/utils/formValidation';
 
 export { isEmptyValue };
 
-/** 金额：≥0 且至多 2 位小数（元） */
+/** 金额：≥0 且至多 2 位小数（元）；允许千分位逗号分隔符（如 1,234.56） */
 export function isValidAmount(raw: string | number | null | undefined): boolean {
   if (raw === null || raw === undefined || raw === '') return false;
-  const n = typeof raw === 'number' ? raw : Number(raw);
+  const s = typeof raw === 'string' ? raw.trim().replace(/,/g, '') : String(raw);
+  const n = typeof raw === 'number' ? raw : Number(s);
   if (!Number.isFinite(n) || n < 0) return false;
-  const s = typeof raw === 'string' ? raw.trim() : String(raw);
   if (typeof raw === 'string' && !/^\d+(\.\d{1,2})?$/.test(s)) return false;
   return Math.round(n * 100) === n * 100;
 }
 
-/** 金额可空（收益金额：可正可负，至多 2 位小数） */
+/** 金额可空（收益金额：可正可负，至多 2 位小数）；允许千分位逗号分隔符 */
 export function isValidSignedAmount(raw: string | number | null | undefined): boolean {
   if (raw === null || raw === undefined || raw === '') return true; // 空 = 留空
-  const n = typeof raw === 'number' ? raw : Number(raw);
+  const s = typeof raw === 'string' ? raw.trim().replace(/,/g, '') : String(raw);
+  const n = typeof raw === 'number' ? raw : Number(s);
   if (!Number.isFinite(n)) return false;
-  if (typeof raw === 'string' && !/^-?\d+(\.\d{1,2})?$/.test(raw.trim())) return false;
+  if (typeof raw === 'string' && !/^-?\d+(\.\d{1,2})?$/.test(s)) return false;
   return Math.round(n * 100) === n * 100;
 }
 
@@ -54,9 +55,9 @@ export function isValidRateInput(raw: string): boolean {
   return Number.isFinite(n) && n >= 0 && n <= 10;
 }
 
-/** 解析输入框中的数字（空 → null） */
+/** 解析输入框中的数字（空 → null）；允许千分位逗号分隔符 */
 export function parseAmount(raw: string): number | null {
-  const t = (raw ?? '').trim();
+  const t = (raw ?? '').trim().replace(/,/g, '');
   if (t === '' || t === '-') return null;
   const n = Number(t);
   return Number.isFinite(n) ? n : null;
