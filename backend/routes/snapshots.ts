@@ -2,7 +2,7 @@
  * 月度快照（05 §3.7/§3.8/§3.9，F-02/F-02b/F-02c/F-03/F-12）：
  * - GET  /snapshots        列表·趋势聚合（仅 admin；viewer 趋势走 reports/assets）
  * - GET  /snapshots/:month 单月详情（有快照全量 / 无快照：沿用清单 + 负债默认值）
- * - PUT  /snapshots/:month 保存当月快照（仅当前月；历史月 → HISTORY_LOCKED）
+ * - PUT  /snapshots/:month 保存当月快照（仅当前月和没有快照的历史月；存在快照的历史月 → HISTORY_LOCKED）
  */
 import { Hono } from 'hono';
 import type { ErrorDetail } from '../lib/errors';
@@ -204,6 +204,11 @@ snapshots.put('/:month', requireAuth, requireAdmin, async (c) => {
   if (!isValidMonth(month)) throw invalidParam('month 格式应为 YYYY-MM');
   const cur = serverCurrentMonth();
   if (month > cur) throw invalidParam('不能保存未来月份的快照');
+  // 历史月已有快照 → 必须走纠错流程，不允许直接覆盖
+  if (month < cur) {
+  const existing = await c.env.DB.prepare('SELECT id FROM monthly_snapshots WHERE month = ?').bind(month).first();
+  if (existing) throw historyLocked();
+  }
 
   const body = asObject(await c.req.json().catch(() => null));
   if (!body) throw invalidParam('请求体必须为 JSON 对象');
