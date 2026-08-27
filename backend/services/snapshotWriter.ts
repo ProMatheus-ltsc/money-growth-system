@@ -388,52 +388,69 @@ function debtSyncStmts(db: Env['DB'], v: ValidatedSnapshot, now: string) {
   );
 }
 
-/** 明细多行 VALUES 单语句（控制 batch 语句数） */
+/** D1/SQLite 单条语句最多绑定变量数（保守值，官方上限 999） */
+const MAX_BIND_VARS = 900;
+
+/** 将大数组按 cols 列数拆分为多条 INSERT，每条不超过 MAX_BIND_VARS 个绑定变量 */
+function chunkedInsert<T>(
+  db: Env['DB'],
+  sql: string,
+  cols: number,
+  rows: T[],
+  mapper: (row: T) => unknown[]
+): ReturnType<Env['DB']['prepare']>[] {
+  if (rows.length === 0) return [];
+  const chunkSize = Math.floor(MAX_BIND_VARS / cols);
+  const stmts: ReturnType<Env['DB']['prepare']>[] = [];
+  const values = (n: number, c: number) => Array(n).fill(`(${Array(c).fill('?').join(',')})`).join(',');
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    stmts.push(
+      db.prepare(`${sql} VALUES ${values(chunk.length, cols)}`).bind(...chunk.flatMap(mapper))
+    );
+  }
+  return stmts;
+}
+
+/** 明细多行 VALUES 语句（自动按 D1 变量上限拆分） */
 function detailInsertStmts(db: Env['DB'], snapshotId: number, v: ValidatedSnapshot, now: string) {
   const stmts: ReturnType<Env['DB']['prepare']>[] = [];
-  const values = (n: number, cols: number) => Array(n).fill(`(${Array(cols).fill('?').join(',')})`).join(',');
-  if (v.assets.length > 0) {
-    stmts.push(
-      db
-        .prepare(
-          `INSERT INTO snapshot_assets (snapshot_id, node_id, balance_cents, has_new_funds, update_source) VALUES ${values(v.assets.length, 5)}`
-        )
-        .bind(...v.assets.flatMap((a) => [snapshotId, a.node_id, a.balance_cents, a.has_new_funds, a.update_source]))
-    );
-  }
-  if (v.gains.length > 0) {
-    stmts.push(
-      db
-        .prepare(`INSERT INTO snapshot_gains (snapshot_id, module_node_id, gain_cents) VALUES ${values(v.gains.length, 3)}`)
-        .bind(...v.gains.flatMap((g) => [snapshotId, g.module_node_id, g.gain_cents]))
-    );
-  }
-  if (v.debts.length > 0) {
-    stmts.push(
-      db
-        .prepare(
-          `INSERT INTO snapshot_debts (snapshot_id, debt_id, balance_cents, repayment_cents) VALUES ${values(v.debts.length, 4)}`
-        )
-        .bind(...v.debts.flatMap((d) => [snapshotId, d.debt_id, d.balance_cents, d.repayment_cents]))
-    );
-  }
+  stmts.push(...chunkedInsert(
+    db,
+    'INSERT INTO snapshot_assets (snapshot_id, node_id, balance_cents, has_new_funds, update_source)',
+    5,
+    v.assets,
+    (a) => [snapshotId, a.node_id, a.balance_cents, a.has_new_funds, a.update_source]
+  ));
+  stmts.push(...chunkedInsert(
+    db,
+    'INSERT INTO snapshot_gains (snapshot_id, module_node_id, gain_cents)',
+    3,
+    v.gains,
+    (g) => [snapshotId, g.module_node_id, g.gain_cents]
+  ));
+  stmts.push(...chunkedInsert(
+    db,
+    'INSERT INTO snapshot_debts (snapshot_id, debt_id, balance_cents, repayment_cents)',
+    4,
+    v.debts,
+    (d) => [snapshotId, d.debt_id, d.balance_cents, d.repayment_cents]
+  ));
   const catAll = [...v.income, ...v.expense];
-  if (catAll.length > 0) {
-    stmts.push(
-      db
-        .prepare(`INSERT INTO snapshot_cat_amounts (snapshot_id, cat_item_id, amount_cents) VALUES ${values(catAll.length, 3)}`)
-        .bind(...catAll.flatMap((x) => [snapshotId, x.cat_item_id, x.amount_cents]))
-    );
-  }
-  if (v.largeItems.length > 0) {
-    stmts.push(
-      db
-        .prepare(
-          `INSERT INTO snapshot_large_items (snapshot_id, direction, cat_item_id, name, amount_cents, created_at) VALUES ${values(v.largeItems.length, 6)}`
-        )
-        .bind(...v.largeItems.flatMap((x) => [snapshotId, x.direction, x.cat_item_id, x.name, x.amount_cents, now]))
-    );
-  }
+  stmts.push(...chunkedInsert(
+    db,
+    'INSERT INTO snapshot_cat_amounts (snapshot_id, cat_item_id, amount_cents)',
+    3,
+    catAll,
+    (x) => [snapshotId, x.cat_item_id, x.amount_cents]
+  ));
+  stmts.push(...chunkedInsert(
+    db,
+    'INSERT INTO snapshot_large_items (snapshot_id, direction, cat_item_id, name, amount_cents, created_at)',
+    6,
+    v.largeItems,
+    (x) => [snapshotId, x.direction, x.cat_item_id, x.name, x.amount_cents, now]
+  ));
   return stmts;
 }
 
