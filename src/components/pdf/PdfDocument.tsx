@@ -1,16 +1,73 @@
 /**
- * PdfDocument — PDF 导出的离屏渲染文档（04 §3.5 前端 html2canvas + jsPDF 方案）。
+ * PdfDocument — PDF 导出文档（@react-pdf/renderer 原生排版，04 §3.5 迁移定论）。
  * 导出态自动展开全部明细（F-11 规则 1）；包含三张表 + 关键指标 + 图表 + AI 记录（F-11 验收 1）。
+ * 文本/表格全部用 react-pdf 原生元素重排（A4 多页自动分页）；ECharts 图表无法直接进
+ * react-pdf：由 lib/pdf.ts 离屏渲染三张图表并采集 PNG dataURL，经 chartImages props 以 <Image> 嵌入。
  * 纯展示：数据来自 /api/pdf/payload（05 §3.32）；不含用户身份信息（meta.noPII）。
  */
-import type { PdfPayload, AiSuggestion } from '../../lib/types';
+import { Document, Font, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
+import type { AiSuggestion, PdfPayload } from '../../lib/types';
 import { fmtMoney, fmtRate } from '../../lib/format';
-import { FinanceTreemap } from '@shared/core/components/visualize/finance/FinanceTreemap';
-import { FinanceSankey } from '@shared/core/components/visualize/finance/FinanceSankey';
-import { FinanceWaterfall } from '@shared/core/components/visualize/finance/FinanceWaterfall';
-import { buildSankeyPaletteMap, MODULE_PALETTE } from '../charts/financeChartAdapter';
 
-const P = 720; // 文档宽度（px），与 html2canvas 采样配合保证清晰
+// 中文字体（Noto Sans SC）：react-pdf 渲染期按 URL 拉取并解析；
+// 仅注册单一字重文件，加粗样式按 CSS 字重回退规则解析到同一字面
+Font.register({
+  family: 'NotoSansSC',
+  src: 'https://fonts.gstatic.com/s/notosanssc/v36/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_EnYxNbPzS5HE.ttf',
+});
+
+/** 图表 PNG dataURL（离屏采集）：按 treemap/sankey/waterfall 键取用，可能部分不存在 */
+export interface PdfChartImages {
+  treemap?: string;
+  sankey?: string;
+  waterfall?: string;
+}
+
+/** 离屏图表渲染宽度（px）：沿用旧版文档内容区宽度，作为 PDF 内等比换算基准 */
+export const OFFSCREEN_CHART_WIDTH = 656;
+/** 各图离屏渲染高度（px）：与页面展示基线一致（260~280） */
+export const OFFSCREEN_CHART_HEIGHTS = { treemap: 280, sankey: 280, waterfall: 260 } as const;
+
+const PAGE_MARGIN = 36; // pt
+/** A4 宽 595.28pt − 两侧页边距 */
+const CONTENT_WIDTH = 595.28 - PAGE_MARGIN * 2;
+
+const styles = StyleSheet.create({
+  page: {
+    fontFamily: 'NotoSansSC',
+    fontSize: 10,
+    color: '#334155',
+    lineHeight: 1.6,
+    paddingTop: PAGE_MARGIN,
+    paddingBottom: 40,
+    paddingHorizontal: PAGE_MARGIN,
+  },
+  header: { borderBottomWidth: 2, borderBottomColor: '#0f172a', paddingBottom: 10, marginBottom: 14 },
+  title: { fontSize: 20, fontWeight: 700, color: '#0f172a', lineHeight: 1.3 },
+  meta: { fontSize: 9, color: '#64748b', marginTop: 4 },
+  kpiRow: { flexDirection: 'row', marginBottom: 6 },
+  kpiCard: { flex: 1, borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 6, paddingVertical: 8, paddingHorizontal: 10 },
+  kpiCardGap: { marginLeft: 6 },
+  kpiLabel: { fontSize: 8, color: '#64748b' },
+  kpiValue: { fontSize: 13, fontWeight: 700, color: '#0f172a', marginTop: 2 },
+  section: { marginBottom: 12 },
+  sectionTitle: { fontSize: 12, fontWeight: 700, color: '#0f172a', marginTop: 10, marginBottom: 6 },
+  row: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#e2e8f0', paddingVertical: 4 },
+  cellLabel: { width: '62%', paddingRight: 8, color: '#475569' },
+  cellLabelStrong: { fontWeight: 700, color: '#0f172a' },
+  cellValue: { width: '38%', textAlign: 'right', color: '#334155' },
+  cellValueStrong: { fontWeight: 700, color: '#0f172a' },
+  note: { fontSize: 8, color: '#94a3b8', marginTop: 4 },
+  chartBlock: { marginBottom: 10 },
+  chartImage: { width: '100%' },
+  aiCard: { borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 6, padding: 10, marginBottom: 8 },
+  aiCardTitle: { fontSize: 9, fontWeight: 700, color: '#334155', marginBottom: 6 },
+  aiHeaderRow: { flexDirection: 'row', backgroundColor: '#f1f5f9' },
+  aiHeaderCell: { fontWeight: 700, color: '#475569' },
+  aiRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
+  aiCell: { fontSize: 8, paddingVertical: 3, paddingRight: 4, lineHeight: 1.4, color: '#334155' },
+  footer: { marginTop: 14, borderTopWidth: 1, borderTopColor: '#e2e8f0', paddingTop: 8, fontSize: 8, color: '#94a3b8' },
+});
 
 function money(v: unknown): string {
   return typeof v === 'number' ? fmtMoney(v, 'yuan') : '—';
@@ -22,61 +79,74 @@ interface Row {
   strong?: boolean;
 }
 
+/** 两列表格（科目 + 右对齐金额；strong 行加粗；note 脚注） */
 function Table({ title, rows, note }: { title: string; rows: Row[]; note?: string }) {
   return (
-    <div style={{ marginBottom: 18 }}>
-      <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', margin: '14px 0 8px' }}>{title}</div>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} style={{ borderBottom: '1px solid #e2e8f0' }}>
-              <td style={{ padding: '6px 8px', color: '#475569', fontWeight: r.strong ? 700 : 400 }}>{r.label}</td>
-              <td style={{ padding: '6px 8px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: r.strong ? '#0f172a' : '#334155', fontWeight: r.strong ? 700 : 400 }}>
-                {r.value}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {note && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>{note}</div>}
-    </div>
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle} wrap={false}>
+        {title}
+      </Text>
+      {rows.map((r, i) => (
+        <View key={i} style={styles.row} wrap={false}>
+          <Text style={r.strong ? [styles.cellLabel, styles.cellLabelStrong] : styles.cellLabel}>{r.label}</Text>
+          <Text style={r.strong ? [styles.cellValue, styles.cellValueStrong] : styles.cellValue}>{r.value}</Text>
+        </View>
+      ))}
+      {note ? (
+        <Text style={styles.note} wrap={false}>
+          {note}
+        </Text>
+      ) : null}
+    </View>
   );
 }
 
-function ChartBlock({ title, children }: { title: string; children: React.ReactNode }) {
+/** 图表区块：标题 + 等比换算后的 PNG（离屏宽度 → PDF 内容宽度，保持宽高比） */
+function ChartBlock({ title, src, pxHeight }: { title: string; src: string; pxHeight: number }) {
+  const height = (CONTENT_WIDTH * pxHeight) / OFFSCREEN_CHART_WIDTH;
   return (
-    <div style={{ marginBottom: 18 }}>
-      <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', margin: '14px 0 8px' }}>{title}</div>
-      {children}
-    </div>
+    <View style={styles.chartBlock} wrap={false}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      <Image src={src} style={[styles.chartImage, { height }]} />
+    </View>
   );
 }
 
-/** 由 sankey 数据包构造流带（收入→总收入→支出+结余） */
-function sankeyFlowsOf(sankey: PdfPayload['charts'] extends never ? never : { income?: { cat: string; amount: number }[]; expense?: { cat: string; amount: number }[]; balance?: number } | undefined) {
-  if (!sankey) return { flows: [] as { source: string; target: string; value: number }[], palette: {} as Record<string, string> };
-  const flows: { source: string; target: string; value: number }[] = [];
-  for (const i of sankey.income ?? []) if (i.amount > 0) flows.push({ source: i.cat, target: '总收入', value: i.amount });
-  for (const e of sankey.expense ?? []) if (e.amount > 0) flows.push({ source: '总收入', target: e.cat, value: e.amount });
-  if ((sankey.balance ?? 0) > 0) flows.push({ source: '总收入', target: '结余/净储蓄', value: sankey.balance! });
-  const palette = buildSankeyPaletteMap((sankey.income ?? []).map((i) => i.cat), (sankey.expense ?? []).map((e) => e.cat));
-  return { flows, palette };
-}
+/** AI 建议表列（与旧版表头一致：建议类型/目标模块/当前配置/建议方案/理由/优先级） */
+const SUGGESTION_COLS = [
+  { key: 'type', title: '建议类型', width: '11%' },
+  { key: 'module', title: '目标模块', width: '11%' },
+  { key: 'current', title: '当前配置', width: '20%' },
+  { key: 'plan', title: '建议方案', width: '22%' },
+  { key: 'reason', title: '理由', width: '26%' },
+  { key: 'priority', title: '优先级', width: '10%' },
+] as const;
 
-export function PdfDocument({ payload }: { payload: PdfPayload }) {
-  const st = payload.statements as Record<string, never> & {
-    balanceSheet?: { kpi?: Record<string, number>; details?: { assets?: { name: string; amount: number }[]; debts?: { name: string; term: string; balance: number }[] } };
-    incomeStatement?: { kpi?: Record<string, number>; details?: { income?: { cat: string; amount: number; children?: { cat: string; amount: number }[] }[]; expense?: { cat: string; amount: number; children?: { cat: string; amount: number }[] }[] } };
-    cashFlow?: { kpi?: Record<string, number>; waterfall?: { name: string; amount: number; type: string }[]; details?: { name: string; formula: string; amount: number }[] } | null;
+export function PdfDocument({ payload, chartImages = {} }: { payload: PdfPayload; chartImages?: PdfChartImages }) {
+  const st = payload.statements as {
+    balanceSheet?: {
+      kpi?: Record<string, number>;
+      details?: { assets?: { name: string; amount: number }[]; debts?: { name: string; term: string; balance: number }[] };
+    };
+    incomeStatement?: {
+      kpi?: Record<string, number>;
+      details?: {
+        income?: { cat: string; amount: number; children?: { cat: string; amount: number }[] }[];
+        expense?: { cat: string; amount: number; children?: { cat: string; amount: number }[] }[];
+      };
+    };
+    cashFlow?: {
+      kpi?: Record<string, number>;
+      waterfall?: { name: string; amount: number; type: string }[];
+      details?: { name: string; formula: string; amount: number }[];
+    } | null;
     notes?: Record<string, string>;
   };
-  const charts = payload.charts as { treemap?: { module: string; amount: number; children?: { name: string; amount: number }[] }[]; sankey?: Parameters<typeof sankeyFlowsOf>[0] };
   const kpis = payload.kpis ?? {};
 
   const bs = st.balanceSheet;
   const is = st.incomeStatement;
   const cf = st.cashFlow;
-  const sankey = sankeyFlowsOf(charts.sankey);
 
   // 三张表行
   const bsRows: Row[] = [];
@@ -90,15 +160,15 @@ export function PdfDocument({ payload }: { payload: PdfPayload }) {
   }
   const isRows: Row[] = [];
   if (is) {
-    const pushDir = (label: string, items?: { cat: string; amount: number; children?: { cat: string; amount: number }[] }[]) => {
+    const pushDir = (items?: { cat: string; amount: number; children?: { cat: string; amount: number }[] }[]) => {
       for (const top of items ?? []) {
         isRows.push({ label: top.cat, value: money(top.amount), strong: true });
         for (const c of top.children ?? []) isRows.push({ label: `　${c.cat}`, value: money(c.amount) });
       }
     };
-    pushDir('收入', is.details?.income);
+    pushDir(is.details?.income);
     isRows.push({ label: '收入合计', value: money(is.kpi?.totalIncome), strong: true });
-    pushDir('支出', is.details?.expense);
+    pushDir(is.details?.expense);
     isRows.push({ label: '支出合计', value: money(is.kpi?.totalExpense), strong: true });
     isRows.push({ label: '结余（收入−支出）', value: money(is.kpi?.balance), strong: true });
   }
@@ -110,110 +180,97 @@ export function PdfDocument({ payload }: { payload: PdfPayload }) {
     cfRows.push({ label: '期末现金', value: money(cf.kpi?.closingCash), strong: true });
   }
 
-  const kpiEntries = Object.entries(kpis).filter(([, v]) => typeof v === 'number');
+  const kpiEntries = (Object.entries(kpis) as [string, number][]).filter(([, v]) => typeof v === 'number');
+  // KPI 卡片每行 4 张
+  const kpiRows: [string, number][][] = [];
+  for (let i = 0; i < kpiEntries.length; i += 4) kpiRows.push(kpiEntries.slice(i, i + 4));
 
   return (
-    <div style={{ width: P, padding: 32, background: '#ffffff', color: '#0f172a', fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif' }}>
-      {/* 标题与元信息 */}
-      <div style={{ borderBottom: '3px solid #0f172a', paddingBottom: 12, marginBottom: 18 }}>
-        <div style={{ fontSize: 24, fontWeight: 800 }}>{payload.title}</div>
-        <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
-          生成时间 {payload.meta.generatedAt} · 单位：{payload.meta.unit} · {payload.scope === 'month' ? `月份 ${payload.month}` : `报告 #${payload.reportId}`}
-        </div>
-      </div>
+    <Document>
+      <Page size="A4" style={styles.page}>
+        {/* 标题与元信息 */}
+        <View style={styles.header} wrap={false}>
+          <Text style={styles.title}>{payload.title}</Text>
+          <Text style={styles.meta}>
+            生成时间 {payload.meta.generatedAt} · 单位：{payload.meta.unit} ·{' '}
+            {payload.scope === 'month' ? `月份 ${payload.month}` : `报告 #${payload.reportId}`}
+          </Text>
+        </View>
 
-      {/* 关键指标 */}
-      {kpiEntries.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 18 }}>
-          {kpiEntries.map(([k, v]) => (
-            <div key={k} style={{ flex: '1 1 140px', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 12px' }}>
-              <div style={{ fontSize: 11, color: '#64748b' }}>{k}</div>
-              <div style={{ fontSize: 18, fontWeight: 700, marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
-                {typeof v === 'number' && Math.abs(v) < 10 && !Number.isInteger(v) ? fmtRate(v, 4) : money(v)}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+        {/* 关键指标 */}
+        {kpiRows.map((row, ri) => (
+          <View key={ri} style={styles.kpiRow}>
+            {row.map(([k, v], ci) => (
+              <View key={k} style={ci > 0 ? [styles.kpiCard, styles.kpiCardGap] : styles.kpiCard}>
+                <Text style={styles.kpiLabel}>{k}</Text>
+                <Text style={styles.kpiValue}>{Math.abs(v) < 10 && !Number.isInteger(v) ? fmtRate(v, 4) : money(v)}</Text>
+              </View>
+            ))}
+          </View>
+        ))}
 
-      {/* 图表：资产配置 + 资金流向 */}
-      {charts.treemap && charts.treemap.length > 0 && (
-        <ChartBlock title="资产配置（树图）">
-          <FinanceTreemap
-            data={charts.treemap.map((t) => ({ name: t.module, amount: t.amount, children: (t.children ?? []).map((c) => ({ name: c.name, amount: c.amount })) }))}
-            palette={MODULE_PALETTE}
-            unit="yuan"
-            height={280}
-          />
-        </ChartBlock>
-      )}
-      {sankey.flows.length > 0 && (
-        <ChartBlock title="资金流向（桑基图，收入→支出+结余）">
-          <FinanceSankey flows={sankey.flows} paletteMap={sankey.palette} linkColorMode="source" unit="yuan" height={280} />
-        </ChartBlock>
-      )}
+        {/* 图表：资产配置 + 资金流向 */}
+        {chartImages.treemap && (
+          <ChartBlock title="资产配置（树图）" src={chartImages.treemap} pxHeight={OFFSCREEN_CHART_HEIGHTS.treemap} />
+        )}
+        {chartImages.sankey && (
+          <ChartBlock title="资金流向（桑基图，收入→支出+结余）" src={chartImages.sankey} pxHeight={OFFSCREEN_CHART_HEIGHTS.sankey} />
+        )}
 
-      {/* 三张表 */}
-      {bsRows.length > 0 && <Table title="资产负债表" rows={bsRows} note={st.notes?.debtRatioNote} />}
-      {isRows.length > 0 && <Table title="收支表" rows={isRows} />}
-      {cf && (
-        <>
-          {cf.waterfall && cf.waterfall.length > 0 && (
-            <ChartBlock title="现金变动（瀑布图）">
-              <FinanceWaterfall
-                openingTotal={cf.kpi?.openingCash ?? 0}
-                items={(cf.waterfall ?? []).filter((w) => w.type === 'delta').map((w) => ({ label: w.name, delta: w.amount }))}
-                closingTotal={cf.kpi?.closingCash}
-                unit="yuan"
-                height={260}
-              />
-            </ChartBlock>
-          )}
-          {cfRows.length > 0 && <Table title="现金流量表" rows={cfRows} note="期初现金 + 净现金流 = 期末现金（含「估值与其他」平衡项，保证恒等）" />}
-        </>
-      )}
+        {/* 三张表 */}
+        {bsRows.length > 0 && <Table title="资产负债表" rows={bsRows} note={st.notes?.debtRatioNote} />}
+        {isRows.length > 0 && <Table title="收支表" rows={isRows} />}
+        {cf && (
+          <>
+            {chartImages.waterfall && (
+              <ChartBlock title="现金变动（瀑布图）" src={chartImages.waterfall} pxHeight={OFFSCREEN_CHART_HEIGHTS.waterfall} />
+            )}
+            {cfRows.length > 0 && (
+              <Table title="现金流量表" rows={cfRows} note="期初现金 + 净现金流 = 期末现金（含「估值与其他」平衡项，保证恒等）" />
+            )}
+          </>
+        )}
 
-      {/* AI 分析记录 */}
-      {payload.aiRecords && payload.aiRecords.length > 0 && (
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', margin: '14px 0 8px' }}>AI 分析记录（{payload.aiRecords.length}）</div>
-          {payload.aiRecords.map((r) => {
-            const suggestions = (r.payload?.suggestions ?? []) as AiSuggestion[];
-            return (
-              <div key={r.id} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 12, marginBottom: 10 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#334155', marginBottom: 6 }}>
-                  分析日期 {r.analysisDate} · 资产月份 {r.assetMonth ?? '—'}
-                </div>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-                  <thead>
-                    <tr style={{ background: '#f1f5f9' }}>
-                      {['建议类型', '目标模块', '当前配置', '建议方案', '理由', '优先级'].map((h) => (
-                        <th key={h} style={{ padding: '5px 6px', textAlign: 'left', color: '#475569', fontWeight: 600 }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {suggestions.map((s, i) => (
-                      <tr key={i} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                        <td style={{ padding: '5px 6px' }}>{s.type}</td>
-                        <td style={{ padding: '5px 6px' }}>{s.module}</td>
-                        <td style={{ padding: '5px 6px' }}>{s.current}</td>
-                        <td style={{ padding: '5px 6px' }}>{s.plan}</td>
-                        <td style={{ padding: '5px 6px' }}>{s.reason}</td>
-                        <td style={{ padding: '5px 6px' }}>{s.priority}</td>
-                      </tr>
+        {/* AI 分析记录 */}
+        {payload.aiRecords && payload.aiRecords.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle} wrap={false}>
+              AI 分析记录（{payload.aiRecords.length}）
+            </Text>
+            {payload.aiRecords.map((r) => {
+              const suggestions = r.payload?.suggestions ?? ([] as AiSuggestion[]);
+              return (
+                <View key={r.id} style={styles.aiCard}>
+                  <Text style={styles.aiCardTitle} wrap={false}>
+                    分析日期 {r.analysisDate} · 资产月份 {r.assetMonth ?? '—'}
+                  </Text>
+                  <View style={styles.aiHeaderRow} wrap={false}>
+                    {SUGGESTION_COLS.map((c) => (
+                      <Text key={c.key} style={[styles.aiCell, styles.aiHeaderCell, { width: c.width }]}>
+                        {c.title}
+                      </Text>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })}
-        </div>
-      )}
+                  </View>
+                  {suggestions.map((s, i) => (
+                    <View key={i} style={styles.aiRow} wrap={false}>
+                      {SUGGESTION_COLS.map((c) => (
+                        <Text key={c.key} style={[styles.aiCell, { width: c.width }]}>
+                          {s[c.key]}
+                        </Text>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              );
+            })}
+          </View>
+        )}
 
-      <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 16, borderTop: '1px solid #e2e8f0', paddingTop: 8 }}>
-        本文件由系统自动生成，不含用户身份信息；金额单位为元，比率以小数/百分比表示。
-      </div>
-    </div>
+        {/* 页脚免责说明 */}
+        <View style={styles.footer} wrap={false}>
+          <Text>本文件由系统自动生成，不含用户身份信息；金额单位为元，比率以小数/百分比表示。</Text>
+        </View>
+      </Page>
+    </Document>
   );
 }
