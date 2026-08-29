@@ -620,7 +620,9 @@ export default function EntryPage() {
 
       {editable && tree && catConfig && (
         <>
-          <div className="grid gap-4 xl:grid-cols-2">
+          {/* 资产区 / 收支+负债双栏（容器查询：窄容器单列，≥60rem 双列，与原 xl: 断点桌面列数一致） */}
+          <div className="cq">
+            <div className="cq-grid cq-cols-2-wide gap-4">
             {/* ============ 资产区 ============ */}
             <section className="card">
               <div className="mb-3 flex items-center justify-between">
@@ -752,6 +754,7 @@ export default function EntryPage() {
                   </div>
                 )}
               </section>
+            </div>
             </div>
           </div>
 
@@ -931,7 +934,7 @@ function TreeRow(props: {
     <div>
       <div
         className={`flex flex-wrap items-center gap-2 rounded-md px-2 py-1.5 ${depth === 0 ? 'bg-slate-50 font-medium' : ''}`}
-        style={{ marginLeft: depth * 18 }}
+        style={{ marginLeft: Math.min(depth * 18, 36) }}
       >
         {!isLeaf && kids.length > 0 ? (
           <button onClick={() => props.toggleCollapse(node.id)} className="text-slate-400 hover:text-slate-600" aria-label="折叠/展开">
@@ -1033,7 +1036,7 @@ function TreeRow(props: {
 
       {/* 叶子节点收益金额输入 */}
       {showGain && (
-        <div className="my-1 flex flex-wrap items-center gap-2 rounded-md border border-blue-100 bg-blue-50/50 px-3 py-1.5" style={{ marginLeft: depth * 18 + 26 }}>
+        <div className="my-1 flex flex-wrap items-center gap-2 rounded-md border border-blue-100 bg-blue-50/50 px-3 py-1.5" style={{ marginLeft: Math.min(depth * 18 + 26, 62) }}>
           <span className="text-xs text-slate-600">收益金额（元，不含新增本金，可正可负）</span>
           <input
             value={gainRaw}
@@ -1204,17 +1207,19 @@ function ReadonlySnapshot({ detail, tree, catConfig, debts }: { detail: Snapshot
     <div className="space-y-3">
       <section className="card">
         <h3 className="mb-2 text-sm font-semibold text-slate-800">资产（{fmtMonth(detail.month)} · 只读）</h3>
-        <div className="grid gap-1 sm:grid-cols-2">
-          {(detail.assets ?? []).map((a) => (
-            <div key={a.nodeId} className="flex items-center justify-between rounded bg-slate-50 px-2 py-1 text-xs">
-              <span className="truncate text-slate-600">
-                {nodeName(a.nodeId)}
-                {a.updateSource === 'carried' && <span className="ml-1 text-slate-400">（沿用上期）</span>}
-                {a.hasNewFunds && <span className="ml-1 text-blue-500">新增</span>}
-              </span>
-              <span className="tabular-nums">{fmtMoney(a.balance)}</span>
-            </div>
-          ))}
+        <div className="cq">
+          <div className="cq-grid cq-cols-2 gap-1">
+            {(detail.assets ?? []).map((a) => (
+              <div key={a.nodeId} className="flex items-center justify-between rounded bg-slate-50 px-2 py-1 text-xs">
+                <span className="truncate text-slate-600">
+                  {nodeName(a.nodeId)}
+                  {a.updateSource === 'carried' && <span className="ml-1 text-slate-400">（沿用上期）</span>}
+                  {a.hasNewFunds && <span className="ml-1 text-blue-500">新增</span>}
+                </span>
+                <span className="tabular-nums">{fmtMoney(a.balance)}</span>
+              </div>
+            ))}
+          </div>
         </div>
         {(detail.moduleGains ?? []).length > 0 && (
           <div className="mt-2 text-xs text-slate-500">
@@ -1229,7 +1234,8 @@ function ReadonlySnapshot({ detail, tree, catConfig, debts }: { detail: Snapshot
       </section>
       <section className="card">
         <h3 className="mb-2 text-sm font-semibold text-slate-800">收支与负债（只读）</h3>
-        <div className="grid gap-x-6 gap-y-1 text-xs sm:grid-cols-2">
+        <div className="cq">
+          <div className="cq-grid cq-cols-2 gap-x-6 gap-y-1 text-xs">
           <div>
             <p className="mb-1 font-medium text-slate-500">收入</p>
             {(detail.income ?? []).map((x) => (
@@ -1274,6 +1280,7 @@ function ReadonlySnapshot({ detail, tree, catConfig, debts }: { detail: Snapshot
                 <div className="flex justify-between"><span>结余</span><span className="tabular-nums">{fmtMoney(detail.totals.balance)}</span></div>
               </div>
             )}
+          </div>
           </div>
         </div>
       </section>

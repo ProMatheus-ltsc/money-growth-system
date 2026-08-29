@@ -3,6 +3,7 @@
  * 150~180ms 滑入；再次点击同一元素或点「收起 ✕」收起；月份/报表重绘时由页面清除。
  */
 import React from 'react';
+import { TableScroll } from '@shared/core';
 
 export interface DrillColumn {
   key: string;
@@ -35,7 +36,7 @@ export function DrillPanel({ title, columns, rows, onClose, footer }: DrillPanel
           收起 ✕
         </button>
       </div>
-      <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
+      <TableScroll label={`${title}明细`} className="rounded-md border border-slate-200 bg-white">
         <table className="w-full min-w-[420px] text-sm">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50">
@@ -66,7 +67,7 @@ export function DrillPanel({ title, columns, rows, onClose, footer }: DrillPanel
             )}
           </tbody>
         </table>
-      </div>
+      </TableScroll>
       {footer && <p className="mt-2 text-xs text-slate-400">{footer}</p>}
     </div>
   );

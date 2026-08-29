@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useToast } from '@shared/core/hooks/useToast';
 import { ConfirmDialog } from '@shared/core/components/ConfirmDialog';
+import { TableScroll } from '@shared/core';
 import RecordList from '../adapters/shared/RecordList';
 import type { FormRecord } from '@shared/core/types';
 import { ChevronDown, ChevronRight, Copy, Sparkles, Upload } from 'lucide-react';
@@ -163,7 +164,9 @@ export default function AiPage() {
       </div>
 
       {!isViewer && (
-        <div className="grid gap-4 xl:grid-cols-2">
+        <div className="cq">
+          {/* 导出/导入双栏（容器查询：窄容器单列，≥60rem 双列，与原 xl: 断点桌面列数一致） */}
+          <div className="cq-grid cq-cols-2-wide gap-4">
           {/* ============ 导出（F-09） ============ */}
           <section className="card">
             <div className="mb-3 flex items-center justify-between">
@@ -232,6 +235,7 @@ export default function AiPage() {
               {importing ? '校验并保存中…' : '校验并保存'}
             </button>
           </section>
+          </div>
         </div>
       )}
 
@@ -374,7 +378,7 @@ function ViewerAiResults({ records, loadingRecords, filterMonth, setFilterMonth 
               {isCollapsed ? <ChevronRight size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
             </button>
             {!isCollapsed && (
-              <div className="overflow-x-auto px-4 pb-3">
+              <TableScroll label="AI 建议明细" className="px-4 pb-3">
                 <table className="w-full min-w-[640px] text-xs">
                   <thead>
                     <tr className="text-left text-slate-400">
@@ -396,7 +400,7 @@ function ViewerAiResults({ records, loadingRecords, filterMonth, setFilterMonth 
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableScroll>
             )}
           </section>
         );
@@ -408,32 +412,34 @@ function ViewerAiResults({ records, loadingRecords, filterMonth, setFilterMonth 
 function SuggestionTable({ record }: { record: AiRecord }) {
   const suggestions = record.payload.suggestions ?? [];
   return (
-    <div className="animate-fadeIn overflow-x-auto rounded-lg border border-blue-100 bg-blue-50/30 p-3">
-      <table className="w-full min-w-[640px] text-xs">
-        <thead>
-          <tr className="text-left text-slate-400">
-            {['建议类型', '目标模块', '当前配置', '建议方案', '理由', '优先级'].map((h) => (
-              <th key={h} className="px-2 py-1.5 font-medium">
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {suggestions.map((s, i) => (
-            <tr key={i} className="border-t border-blue-100/50 align-top">
-              <td className="px-2 py-1.5">{s.type}</td>
-              <td className="px-2 py-1.5">{s.module}</td>
-              <td className="px-2 py-1.5">{s.current}</td>
-              <td className="px-2 py-1.5">{s.plan}</td>
-              <td className="px-2 py-1.5">{s.reason}</td>
-              <td className="px-2 py-1.5">
-                <PriorityBadge priority={s.priority} />
-              </td>
+    <div className="animate-fadeIn rounded-lg border border-blue-100 bg-blue-50/30 p-3">
+      <TableScroll label="AI 建议明细">
+        <table className="w-full min-w-[640px] text-xs">
+          <thead>
+            <tr className="text-left text-slate-400">
+              {['建议类型', '目标模块', '当前配置', '建议方案', '理由', '优先级'].map((h) => (
+                <th key={h} className="px-2 py-1.5 font-medium">
+                  {h}
+                </th>
+              ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {suggestions.map((s, i) => (
+              <tr key={i} className="border-t border-blue-100/50 align-top">
+                <td className="px-2 py-1.5">{s.type}</td>
+                <td className="px-2 py-1.5">{s.module}</td>
+                <td className="px-2 py-1.5">{s.current}</td>
+                <td className="px-2 py-1.5">{s.plan}</td>
+                <td className="px-2 py-1.5">{s.reason}</td>
+                <td className="px-2 py-1.5">
+                  <PriorityBadge priority={s.priority} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableScroll>
     </div>
   );
 }

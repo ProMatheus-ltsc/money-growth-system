@@ -3,7 +3,7 @@
  * 一/二级分类增删改、排序与阈值修改；整体提交 → 版本递增（仅影响未来月份）。
  * 条目编辑以 tempId/parentTempId 组织（与契约一致）。
  */
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useToast } from '@shared/core/hooks/useToast';
 import { api, ApiError } from '../../lib/api';
 import type { CatConfig } from '../../lib/types';
@@ -149,10 +149,13 @@ export function CatConfigDialog({ config, onClose, onSaved }: { config: CatConfi
   return (
     <div className="fixed inset-0 z-[9998] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !saving && onClose()} />
-      <div className="animate-in zoom-in-95 relative max-h-[85vh] w-full max-w-2xl overflow-auto rounded-xl bg-white p-6 shadow-2xl duration-200">
+      <div
+        className="animate-in zoom-in-95 modal-clamp cq relative max-h-[85vh] w-full max-w-2xl overflow-auto rounded-xl bg-white p-6 shadow-2xl duration-200"
+        style={{ '--modal-max': '42rem', '--modal-max-h': '85vh' } as CSSProperties}
+      >
         <h3 className="mb-1 font-semibold text-slate-900">⚙ 收支分类配置（当前 catV{config.version}）</h3>
         <p className="mb-4 text-xs text-slate-400">保存后版本号递增，仅影响未来月份；历史月份保留当时分类（F-02b 规则 4/5）。</p>
-        <div className="mb-4 flex items-center gap-2 text-sm">
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-sm">
           <label className="text-slate-600">大额明细阈值（元）</label>
           <input
             value={threshold}
@@ -161,7 +164,8 @@ export function CatConfigDialog({ config, onClose, onSaved }: { config: CatConfi
             className="w-28 rounded-lg border border-slate-300 px-3 py-1.5 text-sm outline-none focus:border-blue-500"
           />
         </div>
-        <div className="flex flex-col gap-4 sm:flex-row">
+        {/* 容器查询：面板窄时收入/支出纵向堆叠（手机列 / 桌面行，与原 sm:flex-row 一致） */}
+        <div className="dialog-cols">
           {renderDirection('income')}
           {renderDirection('expense')}
         </div>

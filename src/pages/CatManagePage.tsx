@@ -6,7 +6,7 @@
  * - 大额明细阈值设置
  * - 保存新版本配置
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { useToast } from '@shared/core/hooks/useToast';
 import { LoadingSpinner } from '@shared/core/components/LoadingSpinner';
 import { ConfirmDialog } from '@shared/core/components/ConfirmDialog';
@@ -237,7 +237,9 @@ export default function CatManagePage() {
         </label>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-2">
+      {/* 收入/支出双栏（容器查询：窄容器单列，≥60rem 双列） */}
+      <div className="cq">
+        <div className="cq-grid cq-cols-2-wide gap-4">
         {/* 收入分类 */}
         <CategorySection
           title="收入分类"
@@ -261,12 +263,16 @@ export default function CatManagePage() {
           onDelete={(pid, item) => setConfirmDelete({ direction: 'expense', parentTempId: pid, tempId: item.tempId, name: item.name })}
           onMove={(pid, tid, d) => moveItem('expense', pid, tid, d)}
         />
+        </div>
       </div>
 
-      {/* 编辑弹窗 */}
+      {/* 编辑弹窗（modal-clamp 钳制：小屏不超视口） */}
       {editDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+          <div
+            className="modal-clamp max-h-[85vh] w-full max-w-sm overflow-auto rounded-2xl bg-white p-6 shadow-xl"
+            style={{ '--modal-max': '24rem', '--modal-max-h': '85vh' } as CSSProperties}
+          >
             <h3 className="mb-4 text-lg font-bold text-slate-900">
               {editDialog.item ? '编辑分类' : editDialog.parentTempId ? '新增二级分类' : '新增一级分类'}
             </h3>

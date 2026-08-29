@@ -4,9 +4,10 @@
  * - 残值曲线图（SVG）
  * - 新增/编辑折旧配置入口
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useToast } from '@shared/core/hooks/useToast';
 import { LoadingSpinner } from '@shared/core/components/LoadingSpinner';
+import { TableScroll } from '@shared/core';
 import { Calculator, ChevronDown, ChevronRight, Plus, TrendingDown } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { currentMonth, fmtMoney } from '../lib/format';
@@ -221,8 +222,9 @@ export default function PhysicalAssetsPage() {
         </button>
       </div>
 
-      {/* KPI 卡片 */}
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+      {/* KPI 卡片（容器查询：窄容器两列，≥60rem 四列，与原 xl: 断点桌面列数一致） */}
+      <div className="cq">
+        <div className="cq-grid cq-cols-4-wide gap-3">
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
           <p className="text-xs text-slate-500">资产总数</p>
           <p className="mt-1 text-xl font-bold text-slate-800">{items.length} 项</p>
@@ -240,6 +242,7 @@ export default function PhysicalAssetsPage() {
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
           <p className="text-xs text-slate-500">累计折旧</p>
           <p className="mt-1 text-xl font-bold text-red-600">{fmtMoney(totalDepreciated)}</p>
+        </div>
         </div>
       </div>
 
@@ -270,7 +273,7 @@ export default function PhysicalAssetsPage() {
         </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-          <div className="overflow-x-auto">
+          <TableScroll label="实物资产明细">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs text-slate-500">
@@ -324,7 +327,7 @@ export default function PhysicalAssetsPage() {
                 })}
               </tbody>
             </table>
-          </div>
+          </TableScroll>
         </div>
       )}
 
@@ -342,10 +345,13 @@ export default function PhysicalAssetsPage() {
         </div>
       )}
 
-      {/* 新增/编辑弹窗 */}
+      {/* 新增/编辑弹窗（modal-clamp 钳制：小屏不超视口） */}
       {showForm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+          <div
+            className="modal-clamp max-h-[85vh] w-full max-w-lg overflow-auto rounded-2xl bg-white p-6 shadow-xl"
+            style={{ '--modal-max': '32rem', '--modal-max-h': '85vh' } as CSSProperties}
+          >
             <h3 className="mb-4 text-lg font-bold text-slate-900">{editingId ? '编辑折旧配置' : '新增折旧配置'}</h3>
 
             {/* 资产选择 */}
@@ -526,8 +532,9 @@ function DepreciationChart({ item }: { item: DepreciationItem }) {
   const currentY = yScale(item.currentValue);
 
   return (
-    <div className="overflow-x-auto">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full max-w-[600px]" style={{ minWidth: 400 }}>
+    <TableScroll label="残值曲线图">
+      {/* viewBox 等比缩放：宽容器 ≤600px 自适应铺满；窄容器保 400px 最小宽（内部滚动 + 滚动阴影提示，标签保持可读） */}
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full min-w-[400px] max-w-[600px]">
         {/* Grid lines */}
         {[0, 0.25, 0.5, 0.75, 1].map(r => {
           const y = PAD.top + chartH * (1 - r);
@@ -580,6 +587,6 @@ function DepreciationChart({ item }: { item: DepreciationItem }) {
           </linearGradient>
         </defs>
       </svg>
-    </div>
+    </TableScroll>
   );
 }

@@ -4,7 +4,7 @@
  * - 新建/编辑节点通过弹窗对话框完成，提供更好的指引
  * - 保留：拖拽排序、启停、删除、升级分组、保存新版本等核心功能
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useAuth } from '../adapters/shared/useAuth';
 import { ConfirmDialog } from '@shared/core/components/ConfirmDialog';
 import { LoadingSpinner } from '@shared/core/components/LoadingSpinner';
@@ -573,7 +573,7 @@ export default function TreeManagePage() {
     return (
       <div key={n.tempId} className="select-none">
         <div
-          className={`group flex items-center gap-2 rounded-lg border px-3 py-2.5 transition-all hover:shadow-sm ${
+          className={`group flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2.5 transition-all hover:shadow-sm ${
             n.enabled
               ? isModule
                 ? 'border-slate-200 bg-white hover:border-blue-200'
@@ -582,7 +582,7 @@ export default function TreeManagePage() {
                 : 'border-slate-100 bg-white hover:border-blue-200'
               : 'border-slate-100 bg-slate-50 opacity-60'
           }`}
-          style={{ marginLeft: depth * 28 }}
+          style={{ marginLeft: Math.min(depth * 28, 56) }}
         >
           {hasChildren ? (
             <button
@@ -643,8 +643,8 @@ export default function TreeManagePage() {
             </span>
           )}
 
-          {/* 操作按钮 */}
-          <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
+          {/* 操作按钮（触屏强制常显 .touch-visible，桌面保持 hover 浮现） */}
+          <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 touch-visible">
             <IconBtn title="编辑" onClick={() => openEditDialog(n)}>
               <Edit2 size={13} />
             </IconBtn>
@@ -681,7 +681,7 @@ export default function TreeManagePage() {
             {/* 连接线 */}
             <div
               className="absolute left-[13px] top-0 bottom-2 border-l-2 border-slate-200"
-              style={{ marginLeft: depth * 28 }}
+              style={{ marginLeft: Math.min(depth * 28, 56) }}
             />
             {kids.map((k, i) => renderTreeNode(k, depth + 1, i === kids.length - 1))}
           </div>
@@ -755,7 +755,10 @@ export default function TreeManagePage() {
       {nodeDialog && (
         <div className="fixed inset-0 z-[9998] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setNodeDialog(null)} />
-          <div className="animate-in zoom-in-95 relative w-full max-w-md rounded-xl bg-white p-6 shadow-2xl duration-200">
+          <div
+            className="animate-in zoom-in-95 modal-clamp cq relative max-h-[85vh] w-full max-w-md overflow-auto rounded-xl bg-white p-6 shadow-2xl duration-200"
+            style={{ '--modal-max': '28rem', '--modal-max-h': '85vh' } as CSSProperties}
+          >
             <h3 className="mb-1 font-semibold text-slate-900">
               {nodeDialog.mode === 'create' ? '添加节点' : '编辑节点'}
             </h3>
@@ -812,8 +815,8 @@ export default function TreeManagePage() {
               </div>
             )}
 
-            {/* 目标收益率 + 更新频率 */}
-            <div className="mb-3 grid grid-cols-2 gap-3">
+            {/* 目标收益率 + 更新频率（容器查询：弹窗窄时单列，≥24rem 双列） */}
+            <div className="mb-3 field-grid">
               <div>
                 <label className="mb-1 block text-xs font-medium text-slate-600">目标年化收益率（%）</label>
                 <input
@@ -917,7 +920,10 @@ export default function TreeManagePage() {
       {saveDialog && (
         <div className="fixed inset-0 z-[9998] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !saving && setSaveDialog(false)} />
-          <div className="animate-in zoom-in-95 relative w-full max-w-md rounded-xl bg-white p-6 shadow-2xl duration-200">
+          <div
+            className="animate-in zoom-in-95 modal-clamp relative max-h-[85vh] w-full max-w-md overflow-auto rounded-xl bg-white p-6 shadow-2xl duration-200"
+            style={{ '--modal-max': '28rem', '--modal-max-h': '85vh' } as CSSProperties}
+          >
             <h3 className="mb-1 font-semibold text-slate-900">保存新版本配置</h3>
             <p className="mb-4 text-xs text-slate-400">
               整树提交生成 v{(config?.version ?? 0) + 1}；新版本仅影响未来月份，历史快照口径不变。
@@ -965,7 +971,10 @@ export default function TreeManagePage() {
       {depDialog && (
         <div className="fixed inset-0 z-[9999] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !depDialog.saving && setDepDialog(null)} />
-          <div className="animate-in zoom-in-95 relative w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl duration-200">
+          <div
+            className="animate-in zoom-in-95 modal-clamp cq relative max-h-[85vh] w-full max-w-lg overflow-auto rounded-xl bg-white p-6 shadow-2xl duration-200"
+            style={{ '--modal-max': '32rem', '--modal-max-h': '85vh' } as CSSProperties}
+          >
             <h3 className="mb-1 flex items-center gap-2 font-semibold text-slate-900">
               <Calculator size={18} className="text-amber-600" />
               折旧配置 — {depDialog.node.name}
@@ -1016,8 +1025,8 @@ export default function TreeManagePage() {
                   })()}
                 </div>
 
-                {/* 购入原值 + 购入年月 */}
-                <div className="mb-3 grid grid-cols-2 gap-3">
+                {/* 购入原值 + 购入年月（容器查询：弹窗窄时单列，≥24rem 双列） */}
+                <div className="mb-3 field-grid">
                   <div>
                     <label className="mb-1 block text-xs font-medium text-slate-600">购入原值（元） *</label>
                     <input

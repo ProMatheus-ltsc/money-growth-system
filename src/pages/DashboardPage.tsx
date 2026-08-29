@@ -12,6 +12,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { TrendingUp, TrendingDown, Wallet, PiggyBank, CreditCard, PencilLine, FileBarChart2, Landmark, ArrowRight, CalendarDays, Sparkles } from 'lucide-react';
+import { TableScroll } from '@shared/core';
 import { api } from '../lib/api';
 import type { MonthSummary } from '../lib/types';
 
@@ -144,8 +145,10 @@ export default function DashboardPage() {
     return (
       <div className="space-y-6 animate-pulse">
         <div className="h-8 bg-slate-200 rounded w-48" />
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map(i => <div key={i} className="h-24 bg-slate-100 rounded-xl" />)}
+        <div className="cq">
+          <div className="cq-grid cq-cols-cards gap-4">
+            {[1, 2, 3, 4].map(i => <div key={i} className="h-24 bg-slate-100 rounded-xl" />)}
+          </div>
         </div>
       </div>
     );
@@ -171,7 +174,9 @@ export default function DashboardPage() {
       {/* 核心指标 */}
       {latestMonth ? (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {/* 核心指标（容器查询流式网格：手机单列 → ≥30rem 两列 → ≥45rem 四列） */}
+          <div className="cq">
+            <div className="cq-grid cq-cols-cards gap-4">
             <MetricCard
               icon={<Wallet size={22} />}
               label="净资产"
@@ -204,31 +209,34 @@ export default function DashboardPage() {
               tone={latestMonth.balance >= 0 ? 'purple' : 'red'}
               to="/reports/finance"
             />
+            </div>
           </div>
 
           {/* 趋势图 */}
           {months.length >= 2 && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div className="card p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-semibold text-slate-700">净资产趋势</h2>
-                  <Link to="/reports/assets" className="text-xs text-blue-600 hover:underline">查看详情 →</Link>
+            <div className="cq">
+              <div className="cq-grid cq-cols-2 gap-4">
+                <div className="card p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-sm font-semibold text-slate-700">净资产趋势</h2>
+                    <Link to="/reports/assets" className="text-xs text-blue-600 hover:underline">查看详情 →</Link>
+                  </div>
+                  <MiniTrendChart data={netWorthTrend} color="#10b981" />
+                  <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-0.5">
+                    <span>{months[Math.max(0, months.length - 6)]?.month}</span>
+                    <span>{months[months.length - 1]?.month}</span>
+                  </div>
                 </div>
-                <MiniTrendChart data={netWorthTrend} color="#10b981" />
-                <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-0.5">
-                  <span>{months[Math.max(0, months.length - 6)]?.month}</span>
-                  <span>{months[months.length - 1]?.month}</span>
-                </div>
-              </div>
-              <div className="card p-5">
-                <div className="flex items-center justify-between mb-3">
-                  <h2 className="text-sm font-semibold text-slate-700">总资产趋势</h2>
-                  <Link to="/reports/assets" className="text-xs text-blue-600 hover:underline">查看详情 →</Link>
-                </div>
-                <MiniTrendChart data={assetTrend} color="#3b82f6" />
-                <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-0.5">
-                  <span>{months[Math.max(0, months.length - 6)]?.month}</span>
-                  <span>{months[months.length - 1]?.month}</span>
+                <div className="card p-5">
+                  <div className="flex items-center justify-between mb-3">
+                    <h2 className="text-sm font-semibold text-slate-700">总资产趋势</h2>
+                    <Link to="/reports/assets" className="text-xs text-blue-600 hover:underline">查看详情 →</Link>
+                  </div>
+                  <MiniTrendChart data={assetTrend} color="#3b82f6" />
+                  <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-0.5">
+                    <span>{months[Math.max(0, months.length - 6)]?.month}</span>
+                    <span>{months[months.length - 1]?.month}</span>
+                  </div>
                 </div>
               </div>
             </div>
@@ -250,13 +258,15 @@ export default function DashboardPage() {
       {/* 快捷入口 */}
       <div>
         <h2 className="text-sm font-semibold text-slate-700 mb-3">快捷操作</h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          <QuickAction icon={<PencilLine size={18} />} label="月末录入" to="/entry" description="录入本月资产余额与收支" />
-          <QuickAction icon={<Landmark size={18} />} label="负债管理" to="/debts" description="管理房贷、信用卡等负债" />
-          <QuickAction icon={<FileBarChart2 size={18} />} label="资产报表" to="/reports/assets" description="查看资产配置与增长分析" />
-          <QuickAction icon={<Sparkles size={18} />} label="AI 分析" to="/ai" description="AI 生成资产配置建议" />
-          <QuickAction icon={<CalendarDays size={18} />} label="报告快照" to="/reports/snapshots" description="季度/年度报告汇总" />
-          <QuickAction icon={<Wallet size={18} />} label="备份恢复" to="/settings/backup" description="云端备份与本地导出" />
+        <div className="cq">
+          <div className="cq-grid cq-cols-3 gap-3">
+            <QuickAction icon={<PencilLine size={18} />} label="月末录入" to="/entry" description="录入本月资产余额与收支" />
+            <QuickAction icon={<Landmark size={18} />} label="负债管理" to="/debts" description="管理房贷、信用卡等负债" />
+            <QuickAction icon={<FileBarChart2 size={18} />} label="资产报表" to="/reports/assets" description="查看资产配置与增长分析" />
+            <QuickAction icon={<Sparkles size={18} />} label="AI 分析" to="/ai" description="AI 生成资产配置建议" />
+            <QuickAction icon={<CalendarDays size={18} />} label="报告快照" to="/reports/snapshots" description="季度/年度报告汇总" />
+            <QuickAction icon={<Wallet size={18} />} label="备份恢复" to="/settings/backup" description="云端备份与本地导出" />
+          </div>
         </div>
       </div>
 
@@ -267,7 +277,7 @@ export default function DashboardPage() {
             <h2 className="text-sm font-semibold text-slate-700">近期月度摘要</h2>
             <Link to="/reports/snapshots" className="text-xs text-blue-600 hover:underline">全部快照 →</Link>
           </div>
-          <div className="overflow-x-auto">
+          <TableScroll label="近期月度摘要">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-slate-50 text-slate-500 text-xs">
@@ -294,7 +304,7 @@ export default function DashboardPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+          </TableScroll>
         </div>
       )}
     </div>

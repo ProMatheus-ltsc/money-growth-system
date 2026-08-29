@@ -138,8 +138,8 @@ export default function FinanceReportPage() {
         </button>
       </PageHeader>
 
-      {/* 页签（250ms） */}
-      <div className="inline-flex rounded-lg border border-slate-200 bg-white p-0.5">
+      {/* 页签（250ms；窄屏可横向滑动，不撑破页宽） */}
+      <div className="inline-flex max-w-full overflow-x-auto rounded-lg border border-slate-200 bg-white p-0.5">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -164,13 +164,18 @@ export default function FinanceReportPage() {
       {/* ============ 资产负债表 ============ */}
       {tab === 'balance' && bs && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-            <KpiCard label="资产总计" value={fmtMoney(bs.kpi.totalAssets, unit)} />
-            <KpiCard label="负债总计" value={fmtMoney(bs.kpi.totalDebt, unit)} hint={`短期 ${fmtMoney(bs.kpi.shortTermDebt, unit)} / 长期 ${fmtMoney(bs.kpi.longTermDebt, unit)}`} />
-            <KpiCard label="净资产（资产−负债）" value={fmtMoney(bs.kpi.netWorth, unit)} negative={bs.kpi.netWorth < 0} emphasized />
-            <KpiCard label="负债率" value={fmtRate(bs.kpi.debtRatio, 4)} hint={data?.notes?.debtRatioNote} negative={bs.kpi.debtRatio > 1} />
+          {/* KPI（容器查询：窄容器两列，≥60rem 四列，与原 xl: 断点桌面列数一致） */}
+          <div className="cq">
+            <div className="cq-grid cq-cols-4-wide gap-3">
+              <KpiCard label="资产总计" value={fmtMoney(bs.kpi.totalAssets, unit)} />
+              <KpiCard label="负债总计" value={fmtMoney(bs.kpi.totalDebt, unit)} hint={`短期 ${fmtMoney(bs.kpi.shortTermDebt, unit)} / 长期 ${fmtMoney(bs.kpi.longTermDebt, unit)}`} />
+              <KpiCard label="净资产（资产−负债）" value={fmtMoney(bs.kpi.netWorth, unit)} negative={bs.kpi.netWorth < 0} emphasized />
+              <KpiCard label="负债率" value={fmtRate(bs.kpi.debtRatio, 4)} hint={data?.notes?.debtRatioNote} negative={bs.kpi.debtRatio > 1} />
+            </div>
           </div>
-          <div className="grid gap-4 xl:grid-cols-2">
+          {/* 双图（容器查询：窄容器单列，≥60rem 双列） */}
+          <div className="cq">
+            <div className="cq-grid cq-cols-2-wide gap-4">
             <ChartCard title="资产结构（树图）" subtitle="点击矩形下钻模块明细" loading={loading} error={error?.message} onRetry={() => setReloadKey((k) => k + 1)}>
               <LazyChart>
                 <LazyTreemap
@@ -200,11 +205,14 @@ export default function FinanceReportPage() {
                 />
               </LazyChart>
             </ChartCard>
+            </div>
           </div>
           <CollapseDetail title={`科目明细（资产 ${bs.details.assets.length} 项 / 负债 ${bs.details.debts.length} 项）`}>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="cq">
+              <div className="cq-grid cq-cols-2 gap-4">
               <DetailTable title="资产（按模块）" rows={bs.details.assets.map((a) => ({ name: a.name, amount: a.amount }))} unit={unit} />
               <DetailTable title="负债（逐科目）" rows={bs.details.debts.map((d) => ({ name: `${d.name}（${d.term === 'short' ? '短期' : '长期'}）`, amount: d.balance }))} unit={unit} />
+              </div>
             </div>
             <p className="mt-2 text-xs text-slate-400">勾稽：净资产 = 资产总计 − 负债总计 = {fmtMoney(bs.kpi.netWorth, unit)}</p>
           </CollapseDetail>
@@ -214,12 +222,17 @@ export default function FinanceReportPage() {
       {/* ============ 收支表 ============ */}
       {tab === 'income' && is && (
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
-            <KpiCard label="总收入" value={fmtMoney(is.kpi.totalIncome, unit)} />
-            <KpiCard label="总支出" value={fmtMoney(is.kpi.totalExpense, unit)} />
-            <KpiCard label="当月结余（收入−支出）" value={fmtMoney(is.kpi.balance, unit)} emphasized negative={is.kpi.balance < 0} direction={is.kpi.balance >= 0 ? 'up' : 'down'} />
+          {/* KPI（容器查询：窄容器两列，≥60rem 三列，与原 xl: 断点桌面列数一致） */}
+          <div className="cq">
+            <div className="cq-grid cq-cols-3-wide gap-3">
+              <KpiCard label="总收入" value={fmtMoney(is.kpi.totalIncome, unit)} />
+              <KpiCard label="总支出" value={fmtMoney(is.kpi.totalExpense, unit)} />
+              <KpiCard label="当月结余（收入−支出）" value={fmtMoney(is.kpi.balance, unit)} emphasized negative={is.kpi.balance < 0} direction={is.kpi.balance >= 0 ? 'up' : 'down'} />
+            </div>
           </div>
-          <div className="grid gap-4 xl:grid-cols-2">
+          {/* 双图（容器查询：窄容器单列，≥60rem 双列） */}
+          <div className="cq">
+            <div className="cq-grid cq-cols-2-wide gap-4">
             <ChartCard title="收支流向（桑基图）" subtitle={`收入→「总收入」→支出+结余 · 结余率 ${fmtRate(is.sankey.balanceRatio)} · 点击流带下钻`} loading={loading} error={error?.message} onRetry={() => setReloadKey((k) => k + 1)}>
               <LazyChart>
                 <LazySankey
@@ -247,11 +260,14 @@ export default function FinanceReportPage() {
                 height={300}
               />
             </ChartCard>
+            </div>
           </div>
           <CollapseDetail title="逐类别收支明细（一级 → 二级 → 大额单笔）">
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="cq">
+              <div className="cq-grid cq-cols-2 gap-4">
               <CategoryDetail direction="收入" items={is.details.income} unit={unit} />
               <CategoryDetail direction="支出" items={is.details.expense} unit={unit} />
+              </div>
             </div>
             <p className="mt-2 text-xs text-slate-400">勾稽：结余 = 总收入 − 总支出 = {fmtMoney(is.kpi.balance, unit)}</p>
           </CollapseDetail>
@@ -265,10 +281,13 @@ export default function FinanceReportPage() {
             <EmptyState title="上月无快照，现金流量表暂不可用" description="现金流量表需以上月末总资产为期初（上月无快照时返回 null，见 05 §3.11）。" />
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
-                <KpiCard label="期初现金（上月末总资产）" value={fmtMoney(cf.kpi.openingCash, unit)} />
-                <KpiCard label="净现金流" value={fmtMoney(cf.kpi.netCashFlow, unit)} emphasized negative={cf.kpi.netCashFlow < 0} direction={cf.kpi.netCashFlow >= 0 ? 'up' : 'down'} />
-                <KpiCard label="期末现金（当月末总资产）" value={fmtMoney(cf.kpi.closingCash, unit)} />
+              {/* KPI（容器查询：窄容器两列，≥60rem 三列） */}
+              <div className="cq">
+                <div className="cq-grid cq-cols-3-wide gap-3">
+                  <KpiCard label="期初现金（上月末总资产）" value={fmtMoney(cf.kpi.openingCash, unit)} />
+                  <KpiCard label="净现金流" value={fmtMoney(cf.kpi.netCashFlow, unit)} emphasized negative={cf.kpi.netCashFlow < 0} direction={cf.kpi.netCashFlow >= 0 ? 'up' : 'down'} />
+                  <KpiCard label="期末现金（当月末总资产）" value={fmtMoney(cf.kpi.closingCash, unit)} />
+                </div>
               </div>
               <ChartCard title="现金变动（瀑布图）" subtitle="期初 → ±构成项 → 期末 · 增绿减红 · 点击柱段查看构成说明" loading={loading} error={error?.message} onRetry={() => setReloadKey((k) => k + 1)}>
                 <LazyChart>

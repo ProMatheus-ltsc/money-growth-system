@@ -40,3 +40,214 @@
     @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 transition-all duration-150 focus:border-blue-500 focus:outline-none focus:ring-[3px] focus:ring-blue-500/15;
   }
 }
+
+/* ===== 容器查询网格（局部适配：按父容器宽度而非视口切换列数） ===== */
+/* 配套 shared-core responsive.css 的 .cq 容器（container-type: inline-size）：
+ * 父容器加 .cq，网格加 .cq-grid + 下列列数类。断点跟随内容实际宽度而非视口，
+ * 侧边栏折叠 / 抽屉展开不影响内部布局；42rem / 45rem 对应桌面主内容区
+ * （≥1024px 视口、侧边栏展开）下的实际可用宽度，保证桌面列数与原 md:/lg: 断点一致。 */
+.cq-grid {
+  display: grid;
+}
+/* grid 子项防溢出：长词 / 图表不撑破列宽 */
+.cq-grid > * {
+  min-width: 0;
+}
+/* 跨整行（如表格类字段） */
+.cq-span-2 {
+  grid-column: 1 / -1;
+}
+
+/* 紧凑统计卡网格：窄容器保持 2 列，容器 ≥42rem 展开为 3/4 列 */
+.cq-cols-3,
+.cq-cols-4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* 宽内容网格（输入 / 文本块）：窄容器单列，避免内容挤压 */
+.cq-cols-2,
+.cq-cols-3-wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* 模板卡片网格（首页）：手机单列 → ≥30rem 两列 → ≥45rem 四列 */
+.cq-cols-cards {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container (min-width: 30rem) {
+  .cq-cols-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 42rem) {
+  .cq-cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cq-cols-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .cq-cols-3-wide {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .cq-cols-4 {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 45rem) {
+  .cq-cols-cards {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* ===== 表单字段网格容器查询（弹窗/表单局部适配） ===== */
+/* 外层 .cq 声明容器（shared-core responsive.css 提供；弹窗面板加 .cq）；
+ * 基线单列；容器 ≥24rem 双列（max-w-md 弹窗桌面内容宽 ≈25rem，保持原 grid-cols-2 视觉） */
+.field-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+}
+.field-grid > * {
+  min-width: 0;
+}
+
+@container (min-width: 24rem) {
+  .field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  /* 多行文本 / 表格字段独占整行 */
+  .field-grid .field-span-2 {
+    grid-column: span 2 / span 2;
+  }
+}
+
+/* ===== 扩展网格变体（本项目特有布局） ===== */
+/* 1:2 双列（健康页评分卡 + 概览卡；原 lg:grid-cols-3 + lg:col-span-2 的容器查询等价）：
+ * 窄容器单列，容器 ≥42rem 时 1fr:2fr（与桌面 1/3 + 2/3 视觉一致） */
+.cq-cols-score-summary {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container (min-width: 42rem) {
+  .cq-cols-score-summary {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  }
+}
+
+/* 五列渐进网格（健康页五比率卡）：单列 → ≥30rem 两列 → ≥45rem 三列 → ≥60rem 五列
+ * （45rem ≈ 1024px 视口扣侧边栏后的内容宽，对应原 lg:grid-cols-3；
+ *   60rem ≈ 1280px 视口扣侧边栏后的内容宽，对应原 xl:grid-cols-5） */
+.cq-cols-5 {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@container (min-width: 30rem) {
+  .cq-cols-5 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 45rem) {
+  .cq-cols-5 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 60rem) {
+  .cq-cols-5 {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+/* ===== 宽屏网格变体（原 xl: 视口断点的容器查询等价） ===== */
+/* xl: 断点（1280px 视口）扣侧边栏后内容宽 ≈ 62rem，取 60rem：
+ * 1024~1279px 视口列数与原版一致，≥1280px 与原 xl: 列数一致 */
+.cq-cols-2-wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cq-cols-3-wide {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cq-cols-4-wide {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@container (min-width: 60rem) {
+  .cq-cols-2-wide {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .cq-cols-3-wide {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .cq-cols-4-wide {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* ===== 卡片内部统计单元网格（原 grid-cols-2 sm:grid-cols-4） ===== */
+/* 摘要卡内部统计单元：卡片容器 ≥26rem 四列、更窄两列
+ * （26rem ≈ 概览卡在 1024px 视口下的内宽，保证桌面四列与原 sm: 断点行为一致） */
+.cq-cols-stats {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@container (min-width: 26rem) {
+  .cq-cols-stats {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+/* ===== 弹窗内双列布局（容器查询替代 sm:flex-row 视口断点） ===== */
+/* 弹窗面板加 .cq 后：面板内容 ≥36rem 双列、更窄单列（桌面行 / 手机列）
+ * （36rem < max-w-2xl 面板内容宽 39rem，桌面保持原 sm:flex-row 双列视觉） */
+.dialog-cols {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.dialog-cols > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+@container (min-width: 36rem) {
+  .dialog-cols {
+    flex-direction: row;
+  }
+}
+
+/* ===== 触屏强制可见（hover 专属交互兜底） ===== */
+/* 桌面 hover 才显示的操作按钮在触屏无 hover，强制常显（关键操作不依赖 hover） */
+@media (pointer: coarse) {
+  .touch-visible {
+    opacity: 1 !important;
+  }
+}
+
+/* ===== 触控基线（仅 pointer: coarse 触屏设备生效，桌面 fine 指针零影响） ===== */
+/* 交互目标 ≥44px（iOS HIG / Material）：全量按钮 + 文本类输入/下拉；桌面视觉保持不变 */
+@media (pointer: coarse) {
+  button,
+  .btn-primary,
+  .btn-secondary,
+  .btn-ghost,
+  .input-field,
+  select,
+  textarea,
+  input[type='text'],
+  input[type='number'],
+  input[type='password'],
+  input[type='month'],
+  input[type='search'],
+  input[type='email'],
+  input[type='tel'],
+  input[type='url'],
+  input:not([type='checkbox']):not([type='radio']),
+  .touch-target {
+    min-height: 44px;
+  }
+}

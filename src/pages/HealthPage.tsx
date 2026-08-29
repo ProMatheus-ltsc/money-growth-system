@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react';
 import { Activity, AlertTriangle, ArrowDown, ArrowUp, BarChart3, PieChart, Shield, TrendingUp } from 'lucide-react';
 import { api } from '../lib/api';
 import { LoadingSpinner } from '@shared/core/components/LoadingSpinner';
+import { TableScroll } from '@shared/core';
 
 interface HealthRatio {
   label: string;
@@ -188,7 +189,7 @@ export default function HealthPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-slate-900">财务健康仪表盘</h1>
           <p className="text-sm text-slate-500 mt-1">基于 CPA 准则的家庭财务健康评估</p>
@@ -208,15 +209,16 @@ export default function HealthPage() {
 
       {health && (
         <>
-          {/* 综合评分 + 摘要 */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* 综合评分 + 摘要（容器查询：窄容器单列，≥42rem 1:2 双列，与原 lg: 3 列 + col-span-2 视觉一致） */}
+          <div className="cq">
+            <div className="cq-grid cq-cols-score-summary gap-6">
             <div className="card p-6 flex flex-col items-center justify-center">
               <ScoreRing score={health.overallScore} status={health.overallStatus} />
               <p className="text-sm text-slate-500 mt-3">综合健康评分</p>
             </div>
-            <div className="card p-6 lg:col-span-2">
+            <div className="cq card p-6">
               <h3 className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2"><BarChart3 className="w-4 h-4" />财务概览（{health.month}）</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="cq-grid cq-cols-stats gap-4">
                 <div><div className="text-xs text-slate-400">净资产</div><div className="text-lg font-bold text-slate-900">{formatYuan(health.summary.netWorth)}</div></div>
                 <div><div className="text-xs text-slate-400">总资产</div><div className="text-lg font-bold text-emerald-600">{formatYuan(health.summary.totalAssets)}</div></div>
                 <div><div className="text-xs text-slate-400">总负债</div><div className="text-lg font-bold text-red-600">{formatYuan(health.summary.totalDebt)}</div></div>
@@ -227,13 +229,16 @@ export default function HealthPage() {
                 <div><div className="text-xs text-slate-400">高流动性资产</div><div className="text-base font-semibold text-blue-600">{formatYuan(health.summary.highLiquidAssets)}</div></div>
               </div>
             </div>
+            </div>
           </div>
 
-          {/* 五大核心比率 */}
+          {/* 五大核心比率（容器查询：单列 → ≥30rem 两列 → ≥45rem 三列 → ≥60rem 五列） */}
           <div>
             <h2 className="text-base font-semibold text-slate-800 mb-3 flex items-center gap-2"><Activity className="w-4 h-4" />核心财务比率</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-              {health.ratios.map((r) => <RatioCard key={r.label} ratio={r} />)}
+            <div className="cq">
+              <div className="cq-grid cq-cols-5 gap-4">
+                {health.ratios.map((r) => <RatioCard key={r.label} ratio={r} />)}
+              </div>
             </div>
           </div>
 
@@ -243,7 +248,7 @@ export default function HealthPage() {
               <AlertTriangle className="w-4 h-4" />资产集中度分析
               <span className="text-xs text-slate-400">（阈值：{(health.concentrationThreshold * 100).toFixed(0)}%）</span>
             </h3>
-            <div className="overflow-x-auto">
+            <TableScroll label="资产集中度分析">
               <table className="w-full text-sm">
                 <thead><tr className="text-slate-500 border-b"><th className="text-left py-2 font-medium">模块</th><th className="text-right py-2 font-medium">金额</th><th className="text-right py-2 font-medium">占比</th><th className="text-center py-2 font-medium">状态</th></tr></thead>
                 <tbody>
@@ -257,11 +262,12 @@ export default function HealthPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </TableScroll>
           </div>
 
-          {/* 流动性结构 + 投资回报率 */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* 流动性结构 + 投资回报率（容器查询：窄容器单列，≥42rem 双列） */}
+          <div className="cq">
+            <div className="cq-grid cq-cols-2 gap-6">
             <div className="card p-5">
               <h3 className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2"><PieChart className="w-4 h-4" />流动性结构</h3>
               <div className="space-y-3">
@@ -285,7 +291,7 @@ export default function HealthPage() {
             <div className="card p-5">
               <h3 className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2"><TrendingUp className="w-4 h-4" />投资回报率对标（月度）</h3>
               <div className="text-xs text-slate-400 mb-2">CPI 月折算率：{(health.cpiRate / 12 * 100).toFixed(3)}%</div>
-              <div className="overflow-x-auto">
+              <TableScroll label="投资回报率对标">
                 <table className="w-full text-sm">
                   <thead><tr className="text-slate-500 border-b"><th className="text-left py-2 font-medium">模块</th><th className="text-right py-2 font-medium">名义收益率</th><th className="text-right py-2 font-medium">实际收益率</th></tr></thead>
                   <tbody>
@@ -298,12 +304,14 @@ export default function HealthPage() {
                     ))}
                   </tbody>
                 </table>
-              </div>
+              </TableScroll>
+            </div>
             </div>
           </div>
 
-          {/* 或有负债披露 + 公允价值重估 */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* 或有负债披露 + 公允价值重估（容器查询：窄容器单列，≥42rem 双列） */}
+          <div className="cq">
+            <div className="cq-grid cq-cols-2 gap-6">
             <div className="card p-5">
               <h3 className="text-sm font-medium text-slate-700 mb-3 flex items-center gap-2"><Shield className="w-4 h-4" />或有负债披露（报表附注）</h3>
               {contingent && contingent.summary.activeCount > 0 ? (
@@ -314,8 +322,8 @@ export default function HealthPage() {
                   </div>
                   <div className="space-y-2">
                     {contingent.items.filter((i) => i.status === 'active').slice(0, 5).map((item) => (
-                      <div key={item.id} className="flex items-center justify-between text-sm p-2 bg-slate-50 rounded">
-                        <div>
+                      <div key={item.id} className="flex flex-wrap items-center justify-between gap-x-2 text-sm p-2 bg-slate-50 rounded">
+                        <div className="min-w-0">
                           <span className="text-slate-700">{item.name}</span>
                           <span className="text-xs text-slate-400 ml-2">{item.liabilityType === 'guarantee' ? '担保' : item.liabilityType === 'litigation' ? '诉讼' : item.liabilityType === 'commitment' ? '承诺' : '其他'}</span>
                         </div>
@@ -342,8 +350,8 @@ export default function HealthPage() {
               {revaluations.length > 0 ? (
                 <div className="space-y-2">
                   {revaluations.slice(0, 5).map((r) => (
-                    <div key={r.id} className="flex items-center justify-between text-sm p-2 bg-slate-50 rounded">
-                      <div>
+                    <div key={r.id} className="flex flex-wrap items-center justify-between gap-x-2 text-sm p-2 bg-slate-50 rounded">
+                      <div className="min-w-0">
                         <span className="text-slate-700">{r.revaluationDate}</span>
                         {r.reason && <span className="text-xs text-slate-400 ml-2">{r.reason}</span>}
                       </div>
@@ -359,6 +367,7 @@ export default function HealthPage() {
               ) : (
                 <p className="text-sm text-slate-400 py-4 text-center">暂无重估记录</p>
               )}
+            </div>
             </div>
           </div>
         </>

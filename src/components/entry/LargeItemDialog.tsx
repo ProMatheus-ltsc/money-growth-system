@@ -1,7 +1,7 @@
 /**
  * 大额单笔明细弹窗（F-02b 规则 2 / 决策 D9）：名称/金额/所属二级分类；< 阈值拒绝。
  */
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useToast } from '@shared/core/hooks/useToast';
 import type { CatConfig } from '../../lib/types';
 import { parseAmount } from '../../lib/validate';
@@ -48,7 +48,10 @@ export function LargeItemDialog({
   return (
     <div className="fixed inset-0 z-[9998] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="animate-in zoom-in-95 relative w-full max-w-sm rounded-xl bg-white p-6 shadow-2xl duration-200">
+      <div
+        className="animate-in zoom-in-95 modal-clamp relative max-h-[85vh] w-full max-w-sm overflow-auto rounded-xl bg-white p-6 shadow-2xl duration-200"
+        style={{ '--modal-max': '24rem', '--modal-max-h': '85vh' } as CSSProperties}
+      >
         <h3 className="mb-3 font-semibold text-slate-900">
           添加大额明细（{direction === 'income' ? '收入' : '支出'}，≥{catConfig.threshold} 元）
         </h3>

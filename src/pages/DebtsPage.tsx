@@ -7,10 +7,11 @@
  * - 趋势：总负债 / 负债率两个独立小倍数折线图（禁双轴，02 §7.9）
  * 注：已入快照月份的余额/还款修改经「整月快照回写」（服务端权威校验，同月覆盖语义）。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import { useToast } from '@shared/core/hooks/useToast';
 import { ConfirmDialog } from '@shared/core/components/ConfirmDialog';
 import { LoadingSpinner } from '@shared/core/components/LoadingSpinner';
+import { TableScroll } from '@shared/core';
 import OptionalFieldsGroup from '@shared/core/components/form/OptionalFieldsGroup';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
@@ -225,29 +226,32 @@ export default function DebtsPage() {
         </div>
       </div>
 
-      {/* KPI 四卡 */}
+      {/* KPI 四卡（容器查询：窄容器两列，≥60rem 四列，与原 xl: 断点桌面列数一致） */}
       {totals && (
-        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-          <KpiCard label="总负债" value={fmtMoney(totals.totalDebt, unit)} hint={`短期 ${fmtMoney(totals.shortTermDebt, unit)} / 长期 ${fmtMoney(totals.longTermDebt, unit)}`} />
-          <KpiCard
-            label="负债率（总负债/总资产）"
-            value={totals.debtRatio === null ? '—' : fmtRate(totals.debtRatio, 4)}
-            hint="唯一住房资产价值未计入资产，房贷负债计入"
-            negative={totals.debtRatio !== null && totals.debtRatio > 1}
-          />
-          <KpiCard label={`月还款合计（${month}）`} value={fmtMoney(totals.monthlyRepayment, unit)} hint="固定按定额 + 非固定按当月实录" />
-          <KpiCard
-            label="净资产"
-            value={totals.netWorth === null ? '—' : fmtMoney(totals.netWorth, unit)}
-            hint="净资产 = 总资产 − 总负债"
-            negative={totals.netWorth !== null && totals.netWorth < 0}
-          />
+        <div className="cq">
+          <div className="cq-grid cq-cols-4-wide gap-3">
+            <KpiCard label="总负债" value={fmtMoney(totals.totalDebt, unit)} hint={`短期 ${fmtMoney(totals.shortTermDebt, unit)} / 长期 ${fmtMoney(totals.longTermDebt, unit)}`} />
+            <KpiCard
+              label="负债率（总负债/总资产）"
+              value={totals.debtRatio === null ? '—' : fmtRate(totals.debtRatio, 4)}
+              hint="唯一住房资产价值未计入资产，房贷负债计入"
+              negative={totals.debtRatio !== null && totals.debtRatio > 1}
+            />
+            <KpiCard label={`月还款合计（${month}）`} value={fmtMoney(totals.monthlyRepayment, unit)} hint="固定按定额 + 非固定按当月实录" />
+            <KpiCard
+              label="净资产"
+              value={totals.netWorth === null ? '—' : fmtMoney(totals.netWorth, unit)}
+              hint="净资产 = 总资产 − 总负债"
+              negative={totals.netWorth !== null && totals.netWorth < 0}
+            />
+          </div>
         </div>
       )}
 
-      {/* 列表 */}
-      <div className="overflow-x-auto card !p-0">
-        <table className="w-full min-w-[860px] text-sm">
+      {/* 列表（宽表格：TableScroll 横向滚动 + 滚动阴影提示） */}
+      <div className="card !p-0">
+        <TableScroll label="负债列表">
+          <table className="w-full min-w-[860px] text-sm">
           <thead>
             <tr className="border-b border-slate-100 bg-slate-50/80 text-left text-xs text-slate-500">
               <th className="px-4 py-3 font-medium">名称</th>
@@ -327,13 +331,16 @@ export default function DebtsPage() {
             )}
           </tbody>
         </table>
+        </TableScroll>
       </div>
 
-      {/* 趋势：两个独立小倍数图（禁双轴） */}
+      {/* 趋势：两个独立小倍数图（禁双轴）（容器查询：窄容器单列，≥42rem 双列） */}
       {months.length > 0 && (
-        <div className="grid gap-3 sm:grid-cols-2">
-          <ChartMiniLine title="总负债趋势" months={months.map((m) => m.month)} values={months.map((m) => m.totalDebt)} kind="money" unit={unit} color="#4a3aa7" />
-          <ChartMiniLine title="负债率趋势" months={months.map((m) => m.month)} values={months.map((m) => m.debtRatio)} kind="rate" color="#eb6834" />
+        <div className="cq">
+          <div className="cq-grid cq-cols-2 gap-3">
+            <ChartMiniLine title="总负债趋势" months={months.map((m) => m.month)} values={months.map((m) => m.totalDebt)} kind="money" unit={unit} color="#4a3aa7" />
+            <ChartMiniLine title="负债率趋势" months={months.map((m) => m.month)} values={months.map((m) => m.debtRatio)} kind="rate" color="#eb6834" />
+          </div>
         </div>
       )}
 
@@ -341,7 +348,7 @@ export default function DebtsPage() {
       {dialog && (
         <div className="fixed inset-0 z-[9998] flex items-center justify-center">
           <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setDialog(null)} />
-          <div className="animate-in zoom-in-95 relative max-h-[85vh] w-full max-w-md overflow-auto rounded-xl bg-white p-6 shadow-2xl duration-200">
+          <div className="animate-in zoom-in-95 modal-clamp relative max-h-[85vh] w-full max-w-md overflow-auto rounded-xl bg-white p-6 shadow-2xl duration-200" style={{ '--modal-max': '28rem', '--modal-max-h': '85vh' } as CSSProperties}>
             <h3 className="mb-4 font-semibold text-slate-900">{dialog.id === null ? '新增负债' : '编辑负债'}</h3>
             <div className="mb-3">
               <label className="mb-1 block text-xs text-slate-500">名称</label>

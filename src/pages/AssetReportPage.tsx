@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../adapters/shared/useAuth';
 import { useToast } from '@shared/core/hooks/useToast';
+import { TableScroll } from '@shared/core';
 import { api, ApiError } from '../lib/api';
 import { fmtMoney, fmtRate, fmtSignedRate } from '../lib/format';
 import type { AssetReportData, FinanceReportData, TreeConfig } from '../lib/types';
@@ -237,23 +238,25 @@ export default function AssetReportPage() {
 
       {data && (
         <>
-          {/* KPI（▲▼ 方向标记，色彩不单独承载语义） */}
-          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-            <KpiCard label="总资产" value={fmtMoney(data.kpi.totalAssets, unit)} direction={data.kpi.momGrowth === null ? 'flat' : data.kpi.momGrowth >= 0 ? 'up' : 'down'} hint={`环比 ${fmtSignedRate(data.kpi.momGrowth)}`} />
-            <KpiCard label="净资产（总资产−总负债）" value={fmtMoney(data.kpi.netWorth, unit)} negative={data.kpi.netWorth < 0} hint={data.kpi.netWorth < 0 ? '负债大于资产，净资产为负值' : undefined} />
-            <KpiCard label="环比增长" value={data.kpi.momGrowth === null ? '—' : fmtSignedRate(data.kpi.momGrowth)} direction={data.kpi.momGrowth === null ? 'flat' : data.kpi.momGrowth >= 0 ? 'up' : 'down'} hint="上月无快照时不可计算" />
-            <KpiCard label="负债率（总负债/总资产）" value={fmtRate(data.kpi.debtRatio, 4)} hint="唯一住房资产价值未计入资产，房贷负债计入" negative={data.kpi.debtRatio > 1} />
+          {/* KPI（▲▼ 方向标记，色彩不单独承载语义）（容器查询：窄容器两列，≥60rem 四列） */}
+          <div className="cq">
+            <div className="cq-grid cq-cols-4-wide gap-3">
+              <KpiCard label="总资产" value={fmtMoney(data.kpi.totalAssets, unit)} direction={data.kpi.momGrowth === null ? 'flat' : data.kpi.momGrowth >= 0 ? 'up' : 'down'} hint={`环比 ${fmtSignedRate(data.kpi.momGrowth)}`} />
+              <KpiCard label="净资产（总资产−总负债）" value={fmtMoney(data.kpi.netWorth, unit)} negative={data.kpi.netWorth < 0} hint={data.kpi.netWorth < 0 ? '负债大于资产，净资产为负值' : undefined} />
+              <KpiCard label="环比增长" value={data.kpi.momGrowth === null ? '—' : fmtSignedRate(data.kpi.momGrowth)} direction={data.kpi.momGrowth === null ? 'flat' : data.kpi.momGrowth >= 0 ? 'up' : 'down'} hint="上月无快照时不可计算" />
+              <KpiCard label="负债率（总负债/总资产）" value={fmtRate(data.kpi.debtRatio, 4)} hint="唯一住房资产价值未计入资产，房贷负债计入" negative={data.kpi.debtRatio > 1} />
+            </div>
           </div>
 
-          {/* 资金/实物资产分类汇总（仅有实物资产时展示） */}
+          {/* 资金/实物资产分类汇总（仅有实物资产时展示；窄屏内层 flex 换行防溢出） */}
           {categoryTotals && (
             <div className="grid grid-cols-2 gap-3">
-              <div className="flex items-center gap-3 rounded-xl border border-blue-100 bg-blue-50/50 px-4 py-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-blue-100 bg-blue-50/50 px-4 py-3">
                 <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-medium text-blue-700">💰 资金资产</span>
                 <span className="text-lg font-bold tabular-nums text-blue-800">{fmtMoney(categoryTotals.financial, unit)}</span>
                 <span className="ml-auto text-xs text-blue-500">{data.kpi.totalAssets > 0 ? `${((categoryTotals.financial / data.kpi.totalAssets) * 100).toFixed(1)}%` : ''}</span>
               </div>
-              <div className="flex items-center gap-3 rounded-xl border border-amber-100 bg-amber-50/50 px-4 py-3">
+              <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-amber-100 bg-amber-50/50 px-4 py-3">
                 <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">📱 实物资产</span>
                 <span className="text-lg font-bold tabular-nums text-amber-800">{fmtMoney(categoryTotals.physical, unit)}</span>
                 <span className="ml-auto text-xs text-amber-500">{data.kpi.totalAssets > 0 ? `${((categoryTotals.physical / data.kpi.totalAssets) * 100).toFixed(1)}%` : ''}</span>
@@ -287,7 +290,9 @@ export default function AssetReportPage() {
             </LazyChart>
           </ChartCard>
 
-          <div className="grid gap-4 xl:grid-cols-2">
+          {/* ② + ⑤ 双图（容器查询：窄容器单列，≥60rem 双列，与原 xl: 断点桌面列数一致） */}
+          <div className="cq">
+            <div className="cq-grid cq-cols-2-wide gap-4">
             {/* ② 树图：资产配置 */}
             <ChartCard title="资产配置（树图）" subtitle="矩形面积 = 金额 · 模块内二级细分 · 点击下钻" loading={loading}>
               <LazyChart>
@@ -313,6 +318,7 @@ export default function AssetReportPage() {
                 />
               </LazyChart>
             </ChartCard>
+            </div>
           </div>
 
           {/* 下钻面板 */}
@@ -335,6 +341,7 @@ export default function AssetReportPage() {
 
           {/* 折叠明细：收益率四态明细表 + 模块更新状态表（F-12） */}
           <CollapseDetail title={`模块收益率明细（四态：自动/折算/留空/不可折算，${data.gainCompare.length} 个模块）`}>
+            <TableScroll label="模块收益率明细">
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-slate-100 text-left text-slate-400">
@@ -359,9 +366,11 @@ export default function AssetReportPage() {
                 ))}
               </tbody>
             </table>
+            </TableScroll>
           </CollapseDetail>
 
           <CollapseDetail title={`模块更新状态明细表（F-12，${data.updateStatus.length} 项）`}>
+            <TableScroll label="模块更新状态明细">
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-slate-100 text-left text-slate-400">
@@ -388,6 +397,7 @@ export default function AssetReportPage() {
                 ))}
               </tbody>
             </table>
+            </TableScroll>
           </CollapseDetail>
         </>
       )}

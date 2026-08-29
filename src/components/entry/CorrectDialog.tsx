@@ -2,7 +2,7 @@
  * 历史纠错弹窗（UI-05 / F-06 / 05 §3.22）：
  * 更正前后对比表 + 勾选确认项，未勾选不放行（前端拦截 + 服务端 confirmed 兜底）。
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { fmtMoney, fmtMonth } from '../../lib/format';
 import type { CatConfig, Debt, SnapshotDetail, TreeConfig } from '../../lib/types';
 import { parseAmount } from '../../lib/validate';
@@ -101,7 +101,10 @@ export function CorrectDialog({
   return (
     <div className="fixed inset-0 z-[9998] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !saving && onCancel()} />
-      <div className="animate-in zoom-in-95 relative w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl duration-200">
+      <div
+        className="animate-in zoom-in-95 modal-clamp relative max-h-[85vh] w-full max-w-lg overflow-auto rounded-xl bg-white p-6 shadow-2xl duration-200"
+        style={{ '--modal-max': '32rem', '--modal-max-h': '85vh' } as CSSProperties}
+      >
         <h3 className="mb-1 font-semibold text-slate-900">历史纠错 · 二次确认（{fmtMonth(month)}）</h3>
         <p className="mb-3 text-xs text-slate-400">请核对更正前后差异；确认后写入纠错日志（更正时间留痕），其他月份不受影响。</p>
         <div className="mb-4 max-h-64 overflow-auto rounded-lg border border-slate-200">

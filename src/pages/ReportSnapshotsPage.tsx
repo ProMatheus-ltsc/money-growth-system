@@ -7,9 +7,10 @@
  *   + 期间三张表 + 全量明细折叠 + 关联 AI 记录（冻结内容，规则 5）
  * - 跨期对比：勾选 A/B → 并排指标（绝对差 + 百分比 + 方向）+ 模块对比图 + 逐模块差异表（高亮变动行）
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useAuth } from '../adapters/shared/useAuth';
 import { useToast } from '@shared/core/hooks/useToast';
+import { TableScroll } from '@shared/core';
 import { ArrowLeft, Download, Lock } from 'lucide-react';
 import { api, ApiError } from '../lib/api';
 import { addMonths, fmtDateTime, fmtMoney, fmtRate, periodLabel, reportTypeLabel } from '../lib/format';
@@ -148,8 +149,9 @@ function ListView({ list, loading, selected, toggleSelect, onOpen, unit }: {
     return <EmptyState title="尚无定期报告快照" description="选择报告类型与期间生成第一份冻结快照（季报/半年报/年报）。" />;
   }
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white shadow-sm">
-      <table className="w-full min-w-[900px] text-sm">
+    <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+      <TableScroll label="报告快照列表">
+        <table className="w-full min-w-[900px] text-sm">
         <thead>
           <tr className="border-b border-slate-100 bg-slate-50 text-left text-xs text-slate-500">
             <th className="px-3 py-2.5 font-medium">选择</th>
@@ -191,6 +193,7 @@ function ListView({ list, loading, selected, toggleSelect, onOpen, unit }: {
           ))}
         </tbody>
       </table>
+      </TableScroll>
     </div>
   );
 }
@@ -267,16 +270,19 @@ function DetailView({ id, unit }: { id: number; unit: 'yuan' | 'wanyuan' }) {
         </button>
       </div>
 
-      {/* KPI（期末口径） */}
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <KpiCard label="期末总资产" value={fmtMoney(detail.kpis.totalAssets, unit)} />
-        <KpiCard label="期末净资产" value={fmtMoney(detail.kpis.netWorth, unit)} negative={detail.kpis.netWorth < 0} />
-        <KpiCard label="期末负债率" value={fmtRate(detail.kpis.debtRatio, 4)} />
-        <KpiCard label="期间结余" value={fmtMoney(detail.kpis.periodBalance, unit)} emphasized />
+      {/* KPI（期末口径）（容器查询：窄容器两列，≥60rem 四列） */}
+      <div className="cq">
+        <div className="cq-grid cq-cols-4-wide gap-3">
+          <KpiCard label="期末总资产" value={fmtMoney(detail.kpis.totalAssets, unit)} />
+          <KpiCard label="期末净资产" value={fmtMoney(detail.kpis.netWorth, unit)} negative={detail.kpis.netWorth < 0} />
+          <KpiCard label="期末负债率" value={fmtRate(detail.kpis.debtRatio, 4)} />
+          <KpiCard label="期间结余" value={fmtMoney(detail.kpis.periodBalance, unit)} emphasized />
+        </div>
       </div>
 
-      {/* 2×2 四图 */}
-      <div className="grid gap-4 xl:grid-cols-2">
+      {/* 2×2 四图（容器查询：窄容器单列，≥60rem 双列） */}
+      <div className="cq">
+        <div className="cq-grid cq-cols-2-wide gap-4">
         <ChartCard title="期末资产配置（树图）" subtitle="期末月份口径">
           <LazyChart>
             <LazyTreemap
@@ -314,6 +320,7 @@ function DetailView({ id, unit }: { id: number; unit: 'yuan' | 'wanyuan' }) {
             />
           </LazyChart>
         </ChartCard>
+        </div>
       </div>
 
       {/* 期间三张表（折叠） */}
@@ -323,11 +330,13 @@ function DetailView({ id, unit }: { id: number; unit: 'yuan' | 'wanyuan' }) {
 
       {/* 全量明细（折叠） */}
       <CollapseDetail title="全量汇总明细（期间收入/支出/结余/负债构成）">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <MiniTable title="期间收入（按类别）" rows={(details.incomeByCat ?? []).map((x) => ({ name: x.cat, amount: x.amount }))} unit={unit} />
-          <MiniTable title="期间支出（按类别）" rows={(details.expenseByCat ?? []).map((x) => ({ name: x.cat, amount: x.amount }))} unit={unit} />
-          <MiniTable title="期末负债构成" rows={(details.debts ?? []).map((d) => ({ name: `${d.name}（${d.term === 'short' ? '短期' : '长期'}）· 期间还款 ${fmtMoney(d.repayment, unit)}`, amount: d.balance }))} unit={unit} />
-          <MiniTable title="逐月结余" rows={(details.monthlyBalances ?? []).map((m) => ({ name: m.month, amount: m.balance }))} unit={unit} />
+        <div className="cq">
+          <div className="cq-grid cq-cols-2 gap-4">
+            <MiniTable title="期间收入（按类别）" rows={(details.incomeByCat ?? []).map((x) => ({ name: x.cat, amount: x.amount }))} unit={unit} />
+            <MiniTable title="期间支出（按类别）" rows={(details.expenseByCat ?? []).map((x) => ({ name: x.cat, amount: x.amount }))} unit={unit} />
+            <MiniTable title="期末负债构成" rows={(details.debts ?? []).map((d) => ({ name: `${d.name}（${d.term === 'short' ? '短期' : '长期'}）· 期间还款 ${fmtMoney(d.repayment, unit)}`, amount: d.balance }))} unit={unit} />
+            <MiniTable title="逐月结余" rows={(details.monthlyBalances ?? []).map((m) => ({ name: m.month, amount: m.balance }))} unit={unit} />
+          </div>
         </div>
       </CollapseDetail>
 
@@ -359,7 +368,8 @@ function StatementsBlock({ statements, unit }: { statements: ReportSnapshotDetai
   const is = statements.incomeStatement;
   const cf = statements.cashFlow as { kpi?: { openingCash: number; netCashFlow: number; closingCash: number }; waterfall?: { name: string; amount: number; type: string }[] } | null | undefined;
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
+    <div className="cq">
+      <div className="cq-grid cq-cols-3 gap-4">
       <div>
         <p className="mb-1 text-xs font-semibold text-slate-500">资产负债表（期末）</p>
         {bs ? (
@@ -396,6 +406,7 @@ function StatementsBlock({ statements, unit }: { statements: ReportSnapshotDetai
         ) : (
           <p className="text-xs text-slate-400">期初之前无快照，期间现金流不可用。</p>
         )}
+      </div>
       </div>
     </div>
   );
@@ -458,9 +469,10 @@ function CompareView({ a, b, unit }: { a: number; b: number; unit: 'yuan' | 'wan
         跨期对比：{data.a.label} <span className="text-slate-400">vs</span> {data.b.label}
       </h3>
 
-      {/* 并排指标差异 */}
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        {data.diffs.map((d) => (
+      {/* 并排指标差异（容器查询：窄容器两列，≥60rem 四列） */}
+      <div className="cq">
+        <div className="cq-grid cq-cols-4-wide gap-3">
+          {data.diffs.map((d) => (
           <div key={d.metric} className="card">
             <p className="text-xs text-slate-500">{METRIC_LABEL[d.metric] ?? d.metric}</p>
             <p className="mt-1 flex items-baseline gap-1 text-lg font-semibold tabular-nums">
@@ -474,7 +486,8 @@ function CompareView({ a, b, unit }: { a: number; b: number; unit: 'yuan' | 'wan
               {d.pctDiff !== null ? `（${(d.pctDiff * 100).toFixed(2)}%）` : ''}
             </p>
           </div>
-        ))}
+          ))}
+        </div>
       </div>
 
       {/* 模块余额对比图 */}
@@ -492,6 +505,7 @@ function CompareView({ a, b, unit }: { a: number; b: number; unit: 'yuan' | 'wan
 
       {/* 逐模块差异表（折叠 + 高亮变动行） */}
       <CollapseDetail title="逐模块差异明细表">
+        <TableScroll label="逐模块差异明细">
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-slate-100 text-left text-slate-400">
@@ -514,10 +528,12 @@ function CompareView({ a, b, unit }: { a: number; b: number; unit: 'yuan' | 'wan
             ))}
           </tbody>
         </table>
+        </TableScroll>
       </CollapseDetail>
 
       {/* 负债对比 */}
       <CollapseDetail title="负债对比">
+        <TableScroll label="负债对比">
         <table className="w-full text-xs">
           <thead>
             <tr className="border-b border-slate-100 text-left text-slate-400">
@@ -538,6 +554,7 @@ function CompareView({ a, b, unit }: { a: number; b: number; unit: 'yuan' | 'wan
             ))}
           </tbody>
         </table>
+        </TableScroll>
       </CollapseDetail>
     </div>
   );
@@ -627,7 +644,10 @@ function GenerateDialog({ onClose, onDone }: { onClose: () => void; onDone: () =
   return (
     <div className="fixed inset-0 z-[9998] flex items-center justify-center">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !generating && onClose()} />
-      <div className="animate-in zoom-in-95 relative w-full max-w-md rounded-xl bg-white p-6 shadow-2xl duration-200">
+      <div
+        className="animate-in zoom-in-95 modal-clamp relative max-h-[85vh] w-full max-w-md overflow-auto rounded-xl bg-white p-6 shadow-2xl duration-200"
+        style={{ '--modal-max': '28rem', '--modal-max-h': '85vh' } as CSSProperties}
+      >
         <h3 className="mb-4 font-semibold text-slate-900">生成定期报告快照</h3>
         <div className="mb-3">
           <label className="mb-1 block text-xs text-slate-500">报告类型</label>
