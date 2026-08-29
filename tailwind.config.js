@@ -6,6 +6,7 @@ export default {
     './index.html',
     './src/**/*.{ts,tsx}',
     './vendor/shared-core/src/**/*.{ts,tsx}',
+    '../shared-core/src/**/*.{ts,tsx}',
   ],
   theme: {
     extend: {
