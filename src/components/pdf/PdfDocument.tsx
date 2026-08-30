@@ -60,10 +60,9 @@ const styles = StyleSheet.create({
   chartImage: { width: '100%' },
   aiCard: { borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 6, padding: 10, marginBottom: 8 },
   aiCardTitle: { fontSize: 9, fontWeight: 700, color: '#334155', marginBottom: 6 },
-  aiHeaderRow: { flexDirection: 'row', backgroundColor: '#f1f5f9' },
-  aiHeaderCell: { fontWeight: 700, color: '#475569' },
-  aiRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  aiCell: { fontSize: 8, paddingVertical: 3, paddingRight: 4, lineHeight: 1.4, color: '#334155' },
+  aiItem: { borderTopWidth: 1, borderTopColor: '#f1f5f9', paddingTop: 5, marginTop: 5 },
+  aiItemTitle: { fontSize: 8.5, fontWeight: 700, color: '#475569', marginBottom: 2 },
+  aiItemLine: { fontSize: 8.5, lineHeight: 1.5, color: '#334155' },
   footer: { marginTop: 14, borderTopWidth: 1, borderTopColor: '#e2e8f0', paddingTop: 8, fontSize: 8, color: '#94a3b8' },
 });
 
@@ -110,15 +109,28 @@ function ChartBlock({ title, src, pxHeight }: { title: string; src: string; pxHe
   );
 }
 
-/** AI 建议表列（与旧版表头一致：建议类型/目标模块/当前配置/建议方案/理由/优先级） */
-const SUGGESTION_COLS = [
-  { key: 'type', title: '建议类型', width: '11%' },
-  { key: 'module', title: '目标模块', width: '11%' },
-  { key: 'current', title: '当前配置', width: '20%' },
-  { key: 'plan', title: '建议方案', width: '22%' },
-  { key: 'reason', title: '理由', width: '26%' },
-  { key: 'priority', title: '优先级', width: '10%' },
-] as const;
+/** KPI 键 → 中文名（后端键集封闭：totalAssets/netWorth/debtRatio/balance/periodBalance） */
+const KPI_LABELS: Record<string, string> = {
+  totalAssets: '总资产',
+  netWorth: '净资产',
+  debtRatio: '负债率',
+  balance: '当月结余',
+  periodBalance: '期间结余',
+};
+
+/** AI 建议行（建议类型/目标模块/当前配置/建议方案/理由/优先级 六要素，整行标签式排版） */
+function AiSuggestionItem({ s }: { s: AiSuggestion }) {
+  return (
+    <View style={styles.aiItem}>
+      <Text style={styles.aiItemTitle} wrap={false}>
+        {s.type} · {s.module} · 优先级 {s.priority}
+      </Text>
+      <Text style={styles.aiItemLine}>当前配置：{s.current}</Text>
+      <Text style={styles.aiItemLine}>建议方案：{s.plan}</Text>
+      <Text style={styles.aiItemLine}>理由：{s.reason}</Text>
+    </View>
+  );
+}
 
 export function PdfDocument({ payload, chartImages = {} }: { payload: PdfPayload; chartImages?: PdfChartImages }) {
   const st = payload.statements as {
@@ -200,7 +212,7 @@ export function PdfDocument({ payload, chartImages = {} }: { payload: PdfPayload
           <View key={ri} style={styles.kpiRow}>
             {row.map(([k, v], ci) => (
               <View key={k} style={ci > 0 ? [styles.kpiCard, styles.kpiCardGap] : styles.kpiCard}>
-                <Text style={styles.kpiLabel}>{k}</Text>
+                <Text style={styles.kpiLabel}>{KPI_LABELS[k] ?? k}</Text>
                 <Text style={styles.kpiValue}>{Math.abs(v) < 10 && !Number.isInteger(v) ? fmtRate(v, 4) : money(v)}</Text>
               </View>
             ))}
@@ -242,21 +254,8 @@ export function PdfDocument({ payload, chartImages = {} }: { payload: PdfPayload
                   <Text style={styles.aiCardTitle} wrap={false}>
                     分析日期 {r.analysisDate} · 资产月份 {r.assetMonth ?? '—'}
                   </Text>
-                  <View style={styles.aiHeaderRow} wrap={false}>
-                    {SUGGESTION_COLS.map((c) => (
-                      <Text key={c.key} style={[styles.aiCell, styles.aiHeaderCell, { width: c.width }]}>
-                        {c.title}
-                      </Text>
-                    ))}
-                  </View>
                   {suggestions.map((s, i) => (
-                    <View key={i} style={styles.aiRow} wrap={false}>
-                      {SUGGESTION_COLS.map((c) => (
-                        <Text key={c.key} style={[styles.aiCell, { width: c.width }]}>
-                          {s[c.key]}
-                        </Text>
-                      ))}
-                    </View>
+                    <AiSuggestionItem key={i} s={s} />
                   ))}
                 </View>
               );
