@@ -5,16 +5,14 @@
  * react-pdf：由 lib/pdf.ts 离屏渲染三张图表并采集 PNG dataURL，经 chartImages props 以 <Image> 嵌入。
  * 纯展示：数据来自 /api/pdf/payload（05 §3.32）；不含用户身份信息（meta.noPII）。
  */
-import { Document, Font, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
+import { Font, Document, Image, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
+import { registerPdfChineseFont } from '@shared/core/utils/pdfFont';
 import type { AiSuggestion, PdfPayload } from '../../lib/types';
 import { fmtMoney, fmtRate } from '../../lib/format';
 
-// 中文字体（Noto Sans SC）：react-pdf 渲染期按 URL 拉取并解析；
-// 仅注册单一字重文件，加粗样式按 CSS 字重回退规则解析到同一字面
-Font.register({
-  family: 'NotoSansSC',
-  src: 'https://fonts.gstatic.com/s/notosanssc/v36/k3kCo84MPvpLmixcA63oeAL7Iqp5IZJF9bmaG9_EnYxNbPzS5HE.ttf',
-});
+// 中文字体本地化：fonts.gstatic.com 在部分网络不可达，远程 fetch 会导致 toBlob() 抛 Failed to fetch；
+// 字体文件随 public/fonts/ 分发，注册逻辑沉淀在 @shared/core/utils/pdfFont
+registerPdfChineseFont(Font, import.meta.env.BASE_URL);
 
 /** 图表 PNG dataURL（离屏采集）：按 treemap/sankey/waterfall 键取用，可能部分不存在 */
 export interface PdfChartImages {
@@ -34,7 +32,7 @@ const CONTENT_WIDTH = 595.28 - PAGE_MARGIN * 2;
 
 const styles = StyleSheet.create({
   page: {
-    fontFamily: 'NotoSansSC',
+    fontFamily: 'Noto Sans SC',
     fontSize: 10,
     color: '#334155',
     lineHeight: 1.6,
