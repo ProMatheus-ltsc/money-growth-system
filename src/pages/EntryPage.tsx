@@ -54,6 +54,9 @@ interface FormState {
 
 const emptyForm = (): FormState => ({ assets: {}, gains: {}, income: {}, expense: {}, largeItems: [], debts: {} });
 
+/** 纠错窗口（自然月数）：仅支持最近 20 个月；快照永久保存，更早数据仅供查看（05 §3.22 F-06） */
+const CORRECT_WINDOW_MONTHS = 20;
+
 type Mode = 'current-new' | 'current-overwrite' | 'history-locked' | 'history-correct' | 'no-snapshot-past' | 'future';
 
 export default function EntryPage() {
@@ -83,18 +86,20 @@ export default function EntryPage() {
   const [depValues, setDepValues] = useState<Map<number, DepreciationValue>>(new Map());
 
   // 已保存月份历史（useMonthlySnapshots REST 适配 + VersionHistoryList 展示，04 §3.9 行 9/10）
+  // 列表仅展示最近 20 个月（纠错窗口）；快照永久保存，更早月份仍可经顶部月份切换查看
   const { months: historyMonths, loading: historyLoading, refresh: refreshHistory } = useMonthlySnapshots('all');
-  const savedSnapshots: Snapshot[] = useMemo(
-    () =>
-      historyMonths.map((m) => ({
+  const savedSnapshots: Snapshot[] = useMemo(() => {
+    const cutoff = addMonths(currentMonth(), -(CORRECT_WINDOW_MONTHS - 1));
+    return historyMonths
+      .filter((m) => m.month >= cutoff)
+      .map((m) => ({
         id: m.month,
         recordId: 'monthly-entry',
         label: `${fmtMonth(m.month)} · 总资产 ${fmtMoney(m.totalAssets)} · 结余 ${fmtMoney(m.balance)}${m.corrected ? ' · 已纠错' : ''}`,
         createdAt: `${m.month}-28T12:00:00`,
         data: {},
-      })),
-    [historyMonths]
-  );
+      }));
+  }, [historyMonths]);
 
   // ---------- 数据加载 ----------
   const load = useCallback(async () => {
@@ -579,22 +584,28 @@ export default function EntryPage() {
       </div>
 
       {/* 状态条 */}
-      {mode === 'history-locked' && (
-        <div className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
-          <span>
-            历史月份已锁定（只读）。{detail?.correctedAt ? `上次纠错：${detail.correctedAt}` : ''}
-          </span>
-          <button
-            onClick={() => {
-              setMode('history-correct');
-              showToast('已进入修改模式，提交时需确认变更内容', 'info');
-            }}
-            className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
-          >
-            发起纠错
-          </button>
-        </div>
-      )}
+      {mode === 'history-locked' && (() => {
+        const inWindow = month >= addMonths(currentMonth(), -(CORRECT_WINDOW_MONTHS - 1));
+        return (
+          <div className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800">
+            <span>
+              历史月份已锁定（只读）。{detail?.correctedAt ? `上次纠错：${detail.correctedAt}` : ''}
+              {!inWindow && ` 该月已超过纠错窗口（最近 ${CORRECT_WINDOW_MONTHS} 个月），快照永久保存，仅供查看。`}
+            </span>
+            {inWindow && (
+              <button
+                onClick={() => {
+                  setMode('history-correct');
+                  showToast('已进入修改模式，提交时需确认变更内容', 'info');
+                }}
+                className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
+              >
+                发起纠错
+              </button>
+            )}
+          </div>
+        );
+      })()}
       {mode === 'history-correct' && (
         <div className="flex items-center justify-between rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-800">
           <span>正在修改 {fmtMonth(month)} 的数据，提交时会展示修改前后的对比供您确认。</span>
@@ -621,7 +632,9 @@ export default function EntryPage() {
       {/* 已保存月份历史（「恢复」=切换至该月；「创建快照」=保存当前月） */}
       {editable && (
         <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-          <p className="mb-1 px-1 text-[11px] text-slate-400">历史记录：点击可切换到对应月份查看或继续编辑</p>
+          <p className="mb-1 px-1 text-[11px] text-slate-400">
+            历史记录（最近 {CORRECT_WINDOW_MONTHS} 个月）：点击可切换到对应月份查看或继续编辑；快照永久保存，更早月份可用顶部月份选择查看
+          </p>
           <VersionHistoryList
             snapshots={savedSnapshots}
             loading={historyLoading}

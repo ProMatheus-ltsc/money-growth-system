@@ -9,7 +9,7 @@ import { Hono } from 'hono';
 import type { ErrorDetail } from '../lib/errors';
 import { invalidParam, notFound } from '../lib/errors';
 import { ok } from '../lib/http';
-import { isValidMonth } from '../lib/month';
+import { addMonths, isValidMonth } from '../lib/month';
 import type { AppEnv } from '../middleware/auth';
 import { requireAdmin, requireAuth } from '../middleware/auth';
 import { catKeyPath, loadBundle, type SnapshotBundle } from '../services/snapshotRepo';
@@ -17,6 +17,9 @@ import { asObject, serverCurrentMonth, validateSnapshotInput, writeSnapshot, typ
 import { nodeKeyPath } from '../services/treeUtil';
 
 const correct = new Hono<AppEnv>();
+
+/** 纠错窗口（自然月数）：仅支持最近 20 个月；快照永久保存，更早数据仅供查看 */
+const CORRECT_WINDOW_MONTHS = 20;
 
 function computeDiff(oldB: SnapshotBundle, fresh: SnapshotBundle): { field: string; before: unknown; after: unknown }[] {
   const diff: { field: string; before: unknown; after: unknown }[] = [];
@@ -81,6 +84,10 @@ correct.post('/snapshots/:month/correct', requireAuth, requireAdmin, async (c) =
   const oldBundle = await loadBundle(c.env.DB, month);
   if (!oldBundle) throw notFound(`${month} 尚无快照，无需纠错`);
   if (month >= serverCurrentMonth()) throw invalidParam('当月数据请直接保存（PUT /api/snapshots/{month}），无需纠错');
+  // 纠错窗口：仅最近 20 个自然月（含当月；快照永久保存，更早数据仅供查看）
+  if (month < addMonths(serverCurrentMonth(), -(CORRECT_WINDOW_MONTHS - 1))) {
+    throw invalidParam(`纠错仅支持最近 ${CORRECT_WINDOW_MONTHS} 个月；更早的快照永久保存，仅供查看`);
+  }
 
   const snapshot = body.snapshot;
   const snapBody = asObject(snapshot);
