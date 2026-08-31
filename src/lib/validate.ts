@@ -13,7 +13,8 @@ export function isValidAmount(raw: string | number | null | undefined): boolean 
   const n = typeof raw === 'number' ? raw : Number(s);
   if (!Number.isFinite(n) || n < 0) return false;
   if (typeof raw === 'string' && !/^\d+(\.\d{1,2})?$/.test(s)) return false;
-  return Math.round(n * 100) === n * 100;
+  // 两位小数判定用容差（同后端 yuanToCents）：1.1*100=110.00000000000001 等浮点误差不应误判
+  return Math.abs(n * 100 - Math.round(n * 100)) <= 1e-6;
 }
 
 /** 金额可空（收益金额：可正可负，至多 2 位小数）；允许千分位逗号分隔符 */
@@ -23,7 +24,8 @@ export function isValidSignedAmount(raw: string | number | null | undefined): bo
   const n = typeof raw === 'number' ? raw : Number(s);
   if (!Number.isFinite(n)) return false;
   if (typeof raw === 'string' && !/^-?\d+(\.\d{1,2})?$/.test(s)) return false;
-  return Math.round(n * 100) === n * 100;
+  // 两位小数判定用容差（同后端 yuanToCents）：1.1*100=110.00000000000001 等浮点误差不应误判
+  return Math.abs(n * 100 - Math.round(n * 100)) <= 1e-6;
 }
 
 /** 月份 YYYY-MM */

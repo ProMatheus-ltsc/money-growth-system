@@ -305,7 +305,15 @@ export default function EntryPage() {
     setSaved(false);
     setForm((f) => {
       const cur: AssetEntry = f.assets[nodeId] ?? { balance: '', hasNewFunds: false, updateSource: 'current' };
-      return { ...f, assets: { ...f.assets, [nodeId]: { ...cur, ...patch } } };
+      const assets = { ...f.assets, [nodeId]: { ...cur, ...patch } };
+      // 取消「新增」后收益金额输入框隐藏：同步清掉残留值，避免隐藏字段仍被校验拦截
+      let gains = f.gains;
+      if (patch.hasNewFunds === false && gains[nodeId] !== undefined) {
+        const g = { ...gains };
+        delete g[nodeId];
+        gains = g;
+      }
+      return { ...f, assets, gains };
     });
   };
   const patchGain = (moduleId: number, value: string) => {
@@ -425,7 +433,13 @@ export default function EntryPage() {
       else if (!isValidAmount(a.balance)) errs.push(`「${nodeName(id)}」余额请填写非负数（最多两位小数）`);
     }
     for (const [k, v] of Object.entries(form.gains)) {
-      if (v.trim() !== '' && !isValidSignedAmount(v)) errs.push(`「${nodeName(Number(k))}」收益金额格式有误，请填写数字（可正可负，最多两位小数）`);
+      const id = Number(k);
+      const nd = nodes.find((n) => n.id === id);
+      // 仅校验当前展示/提交的收益金额（叶子 + 非实物 + 已勾选「新增」），
+      // 与 buildPayload 的 moduleGains 口径一致；取消「新增」后的残留值不再拦截保存
+      const eligible = leafSet.has(id) && nd?.assetCategory !== 'physical' && form.assets[id]?.hasNewFunds === true;
+      if (!eligible) continue;
+      if (v.trim() !== '' && !isValidSignedAmount(v)) errs.push(`「${nodeName(id)}」收益金额格式有误，请填写数字（可正可负，最多两位小数）`);
     }
     const validCatIds = new Set<number>();
     const catNameMap = new Map<number, string>();
