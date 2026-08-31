@@ -154,14 +154,28 @@ async function buildDataSection(db: Env['DB'], b: SnapshotBundle): Promise<strin
   ];
 }
 
-/** ## 提示词 */
-function buildPromptSection(): string[] {
-  return [
+/** ## 提示词（含业务模块语义说明，按当月资产树顶层模块名动态匹配） */
+function buildPromptSection(b: SnapshotBundle): string[] {
+  const lines: string[] = [
     '',
     '## 提示词',
     '你是一名家庭财务顾问，请基于以上数据，从资产配置、负债结构、收支结余三方面给出优化建议。',
     '要求：1）每条建议对应一个资产模块或负债/收支项；2）建议需可执行（含具体动作与理由）；3）优先级分为 高/中/低；4）考虑该家庭的风险偏好与目标收益率口径（目标月收益率 = 年化/12）；5）输出严格遵循「## 结果格式」的 JSON 结构，不要输出其他内容。',
   ];
+  // 模块语义（CR-…：按顶层模块名匹配，树中不存在则不输出，避免硬编码失效）
+  const topNames = new Set(b.treeNodes.filter((n) => n.parent_id === null).map((n) => n.name));
+  const semantics: string[] = [];
+  if (topNames.has('消费基金')) {
+    semantics.push('- 「消费基金」为改善型消费基金：资金用于提升生活品质的改善型消费，与基本衣食住行、旅游、数码产品等支出无关，分析时勿将其与日常消费类支出混淆。');
+  }
+  if (topNames.has('创业基金')) {
+    semantics.push('- 「创业基金」为锁定资金：资金锁定、不会有新增流入，分析时勿建议追加投入，收益仅取决于存量表现。');
+  }
+  if (semantics.length > 0) {
+    lines.push('模块语义（务必遵循）：');
+    lines.push(...semantics);
+  }
+  return lines;
 }
 
 /** ## 结果格式 */
@@ -213,7 +227,7 @@ function buildExampleSection(month: string): string[] {
 export async function buildAiExportText(db: Env['DB'], b: SnapshotBundle): Promise<string> {
   const lines = [
     ...(await buildDataSection(db, b)),
-    ...buildPromptSection(),
+    ...buildPromptSection(b),
     ...buildResultSchemaSection(),
     ...buildExampleSection(b.snapshot.month),
   ];
