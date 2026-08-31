@@ -8,24 +8,28 @@ export { isEmptyValue };
 
 /** 金额：≥0 且至多 2 位小数（元）；允许千分位逗号分隔符（如 1,234.56） */
 export function isValidAmount(raw: string | number | null | undefined): boolean {
-  if (raw === null || raw === undefined || raw === '') return false;
-  const s = typeof raw === 'string' ? raw.trim().replace(/,/g, '') : String(raw);
-  const n = typeof raw === 'number' ? raw : Number(s);
-  if (!Number.isFinite(n) || n < 0) return false;
-  if (typeof raw === 'string' && !/^\d+(\.\d{1,2})?$/.test(s)) return false;
-  // 两位小数判定用容差（同后端 yuanToCents）：1.1*100=110.00000000000001 等浮点误差不应误判
-  return Math.abs(n * 100 - Math.round(n * 100)) <= 1e-6;
+  if (raw === null || raw === undefined) return false;
+  // 字符串（表单输入主路径）：正则精确判定小数位数，零浮点运算
+  if (typeof raw === 'string') {
+    const s = raw.trim().replace(/,/g, '');
+    if (s === '') return false;
+    return /^\d+(\.\d{1,2})?$/.test(s) && Number.isFinite(Number(s));
+  }
+  // 数字（快照回填等）：toFixed(2) 往返，判断该值是否恰好是两位小数内的数
+  return Number.isFinite(raw) && raw >= 0 && Number(raw.toFixed(2)) === raw;
 }
 
 /** 金额可空（收益金额：可正可负，至多 2 位小数）；允许千分位逗号分隔符 */
 export function isValidSignedAmount(raw: string | number | null | undefined): boolean {
-  if (raw === null || raw === undefined || raw === '') return true; // 空 = 留空
-  const s = typeof raw === 'string' ? raw.trim().replace(/,/g, '') : String(raw);
-  const n = typeof raw === 'number' ? raw : Number(s);
-  if (!Number.isFinite(n)) return false;
-  if (typeof raw === 'string' && !/^-?\d+(\.\d{1,2})?$/.test(s)) return false;
-  // 两位小数判定用容差（同后端 yuanToCents）：1.1*100=110.00000000000001 等浮点误差不应误判
-  return Math.abs(n * 100 - Math.round(n * 100)) <= 1e-6;
+  if (raw === null || raw === undefined) return true;
+  // 字符串（表单输入主路径）：正则精确判定小数位数，零浮点运算
+  if (typeof raw === 'string') {
+    const s = raw.trim().replace(/,/g, '');
+    if (s === '') return true; // 留空
+    return /^-?\d+(\.\d{1,2})?$/.test(s) && Number.isFinite(Number(s));
+  }
+  // 数字（快照回填等）：toFixed(2) 往返，判断该值是否恰好是两位小数内的数
+  return Number.isFinite(raw) && Number(raw.toFixed(2)) === raw;
 }
 
 /** 月份 YYYY-MM */
