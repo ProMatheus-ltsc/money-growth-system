@@ -106,11 +106,19 @@ export async function validateSnapshotInput(
           .bind(nodeId, month)
           .first<{ balance_cents: number }>();
         if (!last) {
-          errors.push({ field: `${f}.updateSource`, message: `节点 ${nodeId} 无可沿用的上期录入值` });
+          const nm = leafSet.get(nodeId)?.name;
+          errors.push({
+            field: `${f}.updateSource`,
+            message: `「${nm ?? `节点 ${nodeId}`}」无可沿用的上期录入值，请点「本期更新」后填写余额`,
+          });
           continue;
         }
         if (last.balance_cents !== balance) {
-          errors.push({ field: `${f}.balance`, message: `沿用上期时余额必须等于上次录入值（${last.balance_cents / 100} 元）` });
+          const nm = leafSet.get(nodeId)?.name;
+          errors.push({
+            field: `${f}.balance`,
+            message: `「${nm ?? `节点 ${nodeId}`}」沿用上期时余额必须等于上次录入值（${last.balance_cents / 100} 元）`,
+          });
           continue;
         }
       }
@@ -207,7 +215,12 @@ export async function validateSnapshotInput(
         const valid = direction === 'income' ? leafIncome : leafExpense;
         const catItemId = typeof it.catItemId === 'number' ? it.catItemId : null;
         if (catItemId === null || !valid.has(catItemId)) {
-          errors.push({ field: `${f}.catItemId`, message: '所属二级分类不存在或方向不一致' });
+          const rawName = typeof it.name === 'string' ? it.name.trim() : '';
+          const label = rawName ? `「${rawName}」` : `第 ${i + 1} 条`;
+          errors.push({
+            field: `${f}.catItemId`,
+            message: `大额明细${label}所属二级分类不存在或方向不一致，请删除后重新添加`,
+          });
           continue;
         }
         const name = typeof it.name === 'string' ? it.name.trim() : '';

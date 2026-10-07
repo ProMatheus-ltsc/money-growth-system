@@ -101,6 +101,9 @@ export default function EntryPage() {
       }));
   }, [historyMonths]);
 
+  // 收支分类索引（方向隔离 + 仅叶子分类）：与后端校验口径一致，用于提交前校正分类引用
+  const catIndex = useMemo(() => (catConfig ? buildCatIndex(catConfig) : null), [catConfig]);
+
   // ---------- 数据加载 ----------
   const load = useCallback(async () => {
     setLoading(true);
@@ -181,65 +184,57 @@ export default function EntryPage() {
           migratedAssets = newAssets;
           migratedGains = newGains;
         }
-        // 收支分类 ID 迁移（分类配置版本更新后 catItemId 变化）
-        let migratedIncome = draft.income;
-        let migratedExpense = draft.expense;
-        let migratedLargeItems = draft.largeItems;
-        const currentCatIds = new Set<number>();
-        for (const dir of ['income', 'expense'] as const) {
-          for (const top of catRes[dir]) {
-            currentCatIds.add(top.id);
-            for (const child of top.children ?? []) currentCatIds.add(child.id);
-          }
-        }
-        const draftCatIds = [...Object.keys(draft.income), ...Object.keys(draft.expense)].map(Number);
-        const hasOrphanCatIds = draftCatIds.some((id) => !currentCatIds.has(id));
-        if (hasOrphanCatIds) {
-          const catNameToNewId = new Map<string, number>();
-          for (const dir of ['income', 'expense'] as const) {
-            for (const top of catRes[dir]) {
-              catNameToNewId.set(top.name, top.id);
-              for (const child of top.children ?? []) catNameToNewId.set(`${top.name}>${child.name}`, child.id);
+        // 收支分类校正（分类配置版本更新后 catItemId 变化/方向调整）：
+        // 权威口径与后端一致 —— catItemId 必须是「对应方向的二级分类」
+        const catIndex = buildCatIndex(catRes);
+        const draftCatNames = draft.catItemNames;
+        const migrateCatRecord = (rec: Record<number, string>, dir: 'income' | 'expense'): Record<number, string> => {
+          const result: Record<number, string> = {};
+          for (const [oldIdStr, val] of Object.entries(rec)) {
+            const oldId = Number(oldIdStr);
+            if (catIndex.leafIds[dir].has(oldId)) {
+              result[oldId] = val;
+              continue;
             }
+            const catName: string | undefined = draftCatNames?.[oldId];
+            const newId = catName ? catIndex.nameToId[dir].get(catName) : undefined;
+            if (newId !== undefined) result[newId] = val;
           }
-          const draftCatNames = draft.catItemNames;
-          const migrateCatRecord = (rec: Record<number, string>): Record<number, string> => {
-            const result: Record<number, string> = {};
-            for (const [oldIdStr, val] of Object.entries(rec)) {
-              const oldId = Number(oldIdStr);
-              if (currentCatIds.has(oldId)) {
-                result[oldId] = val;
-              } else if (draftCatNames) {
-                const catName: string | undefined = draftCatNames[oldId];
-                const newId = catName ? catNameToNewId.get(catName) : undefined;
-                if (newId !== undefined) result[newId] = val;
-              }
-            }
-            return result;
-          };
-          migratedIncome = migrateCatRecord(draft.income);
-          migratedExpense = migrateCatRecord(draft.expense);
-          if (draft.largeItems.length > 0 && draftCatNames) {
-            migratedLargeItems = draft.largeItems.map((li) => {
-              if (currentCatIds.has(li.catItemId)) return li;
-              const catName: string | undefined = draftCatNames[li.catItemId];
-              const newId = catName ? catNameToNewId.get(catName) : undefined;
-              return newId !== undefined ? { ...li, catItemId: newId } : li;
-            }).filter((li) => currentCatIds.has(li.catItemId));
-          }
-        }
-        setForm({
-          assets: { ...base.assets, ...migratedAssets },
-          gains: { ...base.gains, ...migratedGains },
-          income: { ...base.income, ...migratedIncome },
-          expense: { ...base.expense, ...migratedExpense },
-          largeItems: migratedLargeItems.length > 0 ? migratedLargeItems : base.largeItems,
-          debts: { ...base.debts, ...draft.debts },
+          return result;
+        };
+        const migratedIncome = migrateCatRecord(draft.income, 'income');
+        const migratedExpense = migrateCatRecord(draft.expense, 'expense');
+        // 大额明细：按方向隔离校正（原实现只由收支孤儿 ID 触发迁移、且不区分方向，
+        // 导致明细的分类失效或串到反方向时被原样提交，服务端拒绝"所属二级分类不存在或方向不一致"）；
+        // 无法迁移（分类已删除）的条目直接丢弃并提示，避免整单保存失败
+        const draftLargeItems = draft.largeItems ?? [];
+        const migratedLargeItems = draftLargeItems.flatMap((li) => {
+          if (catIndex.leafIds[li.direction].has(li.catItemId)) return [li];
+          const catName: string | undefined = draftCatNames?.[li.catItemId];
+          const newId = catName ? catIndex.nameToId[li.direction].get(catName) : undefined;
+          return newId !== undefined ? [{ ...li, catItemId: newId }] : [];
         });
+        const droppedLarge = draftLargeItems.length - migratedLargeItems.length;
+        if (droppedLarge > 0) {
+          showToast(`有 ${droppedLarge} 条大额明细的分类已失效，已自动移除，请重新添加`, 'warning', 6000);
+        }
+        setForm(
+          normalizeCarried(
+            {
+              assets: { ...base.assets, ...migratedAssets },
+              gains: { ...base.gains, ...migratedGains },
+              income: { ...base.income, ...migratedIncome },
+              expense: { ...base.expense, ...migratedExpense },
+              largeItems: migratedLargeItems.length > 0 ? migratedLargeItems : base.largeItems,
+              debts: { ...base.debts, ...draft.debts },
+            },
+            detailRes.carried
+          )
+        );
       } else if (detailRes.exists) {
-        setForm(formFromSnapshot(detailRes, debtRes.debts));
+        setForm(normalizeCarried(formFromSnapshot(detailRes, debtRes.debts), detailRes.carried));
       } else {
-        setForm(formFromTemplate(detailRes, debtRes.debts, catRes));
+        setForm(normalizeCarried(formFromTemplate(detailRes, debtRes.debts, catRes), detailRes.carried));
       }
     } catch (e) {
       const ae = e as ApiError;
@@ -372,6 +367,9 @@ export default function EntryPage() {
   // ---------- 保存 ----------
   const buildPayload = () => {
     if (!tree || !catConfig) return null;
+    // 与 TreeRow 的 isCarried 同源：仅当服务端 carried 清单含该节点才提交 carried，
+    // 否则归为 current（防草稿残留的过期 carried 被透传，被服务端以「无可沿用的上期录入值」拒绝）
+    const carryableIds = detail?.carried ? new Set(detail.carried.map((c) => c.nodeId)) : null;
     const assets = [...leafSet].map((nodeId) => {
       const a = form.assets[nodeId] ?? { balance: '0', hasNewFunds: false, updateSource: 'current' as const };
       const dv = depValues.get(nodeId);
@@ -381,11 +379,12 @@ export default function EntryPage() {
       if (isPhys && dv && !dv.isFullyDepreciated) {
         balance = Math.round(dv.currentValue * 100) / 100;
       }
+      const updateSource = carryableIds && a.updateSource === 'carried' && !carryableIds.has(nodeId) ? 'current' : a.updateSource;
       return {
         nodeId,
         balance,
         hasNewFunds: isPhys ? false : a.hasNewFunds,
-        updateSource: a.updateSource,
+        updateSource,
       };
     });
     const moduleGains = [...leafSet]
@@ -399,12 +398,16 @@ export default function EntryPage() {
       (direction === 'income' ? catConfig.income : catConfig.expense).flatMap((top) => (top.children ?? []).map((c) => c.id));
     const income = catLeaves('income').map((catItemId) => ({ catItemId, amount: parseAmount(form.income[catItemId] ?? '') ?? 0 }));
     const expense = catLeaves('expense').map((catItemId) => ({ catItemId, amount: parseAmount(form.expense[catItemId] ?? '') ?? 0 }));
-    const largeItems = form.largeItems.map((li) => ({
-      direction: li.direction,
-      catItemId: li.catItemId,
-      name: li.name,
-      amount: parseAmount(li.amount) ?? 0,
-    }));
+    // 兜底：丢弃分类引用已失效（不存在/方向不一致/非二级分类）的大额明细，
+    // 避免整单被服务端以「所属二级分类不存在或方向不一致」拒绝
+    const largeItems = form.largeItems
+      .filter((li) => catIndex?.leafIds[li.direction].has(li.catItemId) ?? false)
+      .map((li) => ({
+        direction: li.direction,
+        catItemId: li.catItemId,
+        name: li.name,
+        amount: parseAmount(li.amount) ?? 0,
+      }));
     const debtPayload = debts
       .filter((d) => d.enabled)
       .map((d) => ({
@@ -479,6 +482,11 @@ export default function EntryPage() {
     const threshold = catConfig?.threshold ?? 200;
     form.largeItems.forEach((li, i) => {
       if (!isValidName(li.name, 50)) errs.push(`第 ${i + 1} 条大额明细名称需在 1~50 字之间`);
+      // 分类引用有效性（与后端同口径）：失效时明确提示，避免提交后才报「所属二级分类不存在或方向不一致」
+      if (catIndex && !catIndex.leafIds[li.direction].has(li.catItemId)) {
+        errs.push(`第 ${i + 1} 条大额明细「${li.name}」所属分类已失效，请删除后重新添加`);
+        return;
+      }
       const amt = parseAmount(li.amount);
       if (amt === null || amt < threshold) errs.push(`「${li.name}」金额需 ≥ ${threshold} 元才算大额明细`);
     });
@@ -926,6 +934,51 @@ function formFromTemplate(s: SnapshotDetail, debts: Debt[], cat: CatConfig): For
     }
   }
   return f;
+}
+
+/**
+ * 「沿用上期」状态校正：以服务端 carried 清单为唯一权威。
+ *
+ * carriedList 仅在该月尚无快照时由后端返回，它由「更早月份确有 current 录入」推导而来。
+ * 草稿（localStorage）可能残留过期的 carried 标记（资产树节点增删重建、备份恢复后历史录入值
+ * 已不存在等），若不校正：界面按「清单中不存在 → 非沿用」渲染为可编辑输入框，提交时却带
+ * carried 而被服务端拒绝（「节点 N 无可沿用的上期录入值」），表现为"界面正常但无法保存"。
+ * 已有快照的月份 carriedList 为 undefined（快照内的 update_source 是历史事实），保持原样。
+ */
+function normalizeCarried(form: FormState, carriedList?: { nodeId: number }[]): FormState {
+  if (!carriedList) return form;
+  const carryable = new Set(carriedList.map((c) => c.nodeId));
+  const assets: Record<number, AssetEntry> = {};
+  for (const [k, v] of Object.entries(form.assets)) {
+    const id = Number(k);
+    assets[id] = v.updateSource === 'carried' && !carryable.has(id) ? { ...v, updateSource: 'current' } : v;
+  }
+  return { ...form, assets };
+}
+
+/**
+ * 收支分类索引：**按方向隔离**，且只含二级（叶子）分类 —— 与后端校验口径一致
+ * （后端要求 catItemId 必须是「对应方向的二级分类」，见 snapshotWriter）。
+ * 用于校正草稿中可能失效的分类引用：分类配置版本变更后 ID 变化、方向调整、
+ * 或历史数据指向一级分类等情况，否则提交会被服务端拒绝（"所属二级分类不存在或方向不一致"）。
+ */
+interface CatIndex {
+  leafIds: Record<'income' | 'expense', Set<number>>;
+  nameToId: Record<'income' | 'expense', Map<string, number>>;
+}
+
+function buildCatIndex(cat: CatConfig): CatIndex {
+  const leafIds = { income: new Set<number>(), expense: new Set<number>() };
+  const nameToId = { income: new Map<string, number>(), expense: new Map<string, number>() };
+  for (const dir of ['income', 'expense'] as const) {
+    for (const top of cat[dir]) {
+      for (const child of top.children ?? []) {
+        leafIds[dir].add(child.id);
+        nameToId[dir].set(`${top.name}>${child.name}`, child.id);
+      }
+    }
+  }
+  return { leafIds, nameToId };
 }
 
 // ============================================================
