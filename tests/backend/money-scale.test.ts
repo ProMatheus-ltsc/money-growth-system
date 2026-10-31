@@ -7,13 +7,13 @@ import { yuanToCents, centsToYuan } from '../../backend/lib/money.ts';
 
 describe('yuanToCents / centsToYuan', () => {
   it('正常元值转分整数', () => {
-    const errs: never[] = [];
+    const errs: { field: string; message: string }[] = [];
     expect(yuanToCents(12.34, 'balance', errs)).toBe(1234);
     expect(errs).toHaveLength(0);
   });
 
   it('浮点安全：0.07 转 7 分', () => {
-    const errs: never[] = [];
+    const errs: { field: string; message: string }[] = [];
     expect(yuanToCents(0.07, 'a', errs)).toBe(7);
   });
 
@@ -24,14 +24,14 @@ describe('yuanToCents / centsToYuan', () => {
   });
 
   it('负数默认拒绝，min:-Infinity 放行', () => {
-    const errs: unknown[] = [];
+    const errs: { field: string; message: string }[] = [];
     expect(yuanToCents(-1, 'a', errs)).toBeNull();
-    const errs2: unknown[] = [];
+    const errs2: { field: string; message: string }[] = [];
     expect(yuanToCents(-1, 'gain', errs2, { min: -Infinity })).toBe(-100);
   });
 
   it('非数字/空值拒绝', () => {
-    const errs: unknown[] = [];
+    const errs: { field: string; message: string }[] = [];
     expect(yuanToCents('12', 'a', errs)).toBeNull();
     expect(yuanToCents(NaN, 'a', errs)).toBeNull();
     expect(yuanToCents(null, 'a', errs)).toBeNull();

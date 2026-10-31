@@ -19,7 +19,11 @@ mkdirSync(hooksDir, { recursive: true });
 
 const preCommit = `#!/usr/bin/env bash
 set -euo pipefail
-node scripts/autofix/mg-branch-guard.mjs check
+branch="$(git rev-parse --abbrev-ref HEAD)"
+case "$branch" in
+  fix/*) node scripts/autofix/mg-branch-guard.mjs check ;;
+  *) : ;; # 非 fix 分支按仓库常规流程提交（推送仍由 pre-push 统一拦截 main/非 fix 目标）
+esac
 `;
 
 const prePush = `#!/usr/bin/env bash

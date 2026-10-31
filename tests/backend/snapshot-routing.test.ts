@@ -93,6 +93,22 @@ describe('元→分归一与纠错基线', () => {
     expect(snapshotToCents({ exists: false })).toMatchObject({ exists: false, carried: [], debtDefaults: [] });
   });
 
+  it('exists:false 的 carried/debtDefaults 同样归一为分整数', () => {
+    const out = snapshotToCents({
+      exists: false,
+      month: '2026-10',
+      carried: [{ nodeId: 12, balance: 1234.56, lastUpdatedMonth: '2026-07' }],
+      debtDefaults: [
+        { debtId: 1, name: '房贷', fixedRepayment: true, monthlyPayment: 3000, lastBalance: 500 },
+      ],
+    }) as Record<string, any>;
+    expect(out.carried[0].balanceCents).toBe(123456);
+    expect(out.carried[0].balance).toBeUndefined();
+    expect(out.debtDefaults[0].monthlyPaymentCents).toBe(300000);
+    expect(out.debtDefaults[0].lastBalanceCents).toBe(50000);
+    expect(out.debtDefaults[0].lastBalance).toBeUndefined();
+  });
+
   it('纠错基线保留钉住配置 id 且可回写为站点 body', () => {
     const payload = recorderPayloadFromSnapshot(snapshotToCents(raw));
     expect(payload.treeConfigId).toBe(2);

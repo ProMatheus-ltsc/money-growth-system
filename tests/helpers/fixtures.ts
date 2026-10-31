@@ -2,7 +2,8 @@
  * 服务层测试夹具：资产树 / 分类 / 负债 / 快照包。
  * 树形：模块 1「金融资产」(年化 6%) → 末级 11「活期」、12「基金」；模块 2「实物资产」→ 末级 21「自住房」
  */
-import type { SnapshotBundle, TreeNodeRow, CatItemRow, DebtRow } from '../../backend/services/snapshotRepo';
+import type { SnapshotBundle, CatItemRow, DebtRow } from '../../backend/services/snapshotRepo';
+import type { TreeNodeRow } from '../../backend/services/treeUtil';
 
 export function treeNodes(): TreeNodeRow[] {
   const base = {

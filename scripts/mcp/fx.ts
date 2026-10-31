@@ -125,11 +125,15 @@ export class FxService {
     throw new FxError('E_FX_UNAVAILABLE', `主备汇率源均不可用（${base}→CNY），条目转待确认，不使用陈旧值`);
   }
 
-  /** 分整数金额换算为人民币分（四舍五入）；rate 用十进制字符串精确乘 */
+  /** 分整数金额换算为人民币分（四舍五入）；用 BigInt 精确乘，避免浮点误差 */
   convertCentsToCny(amountCents: number, rate: string): number {
     if (!Number.isInteger(amountCents)) throw new Error('amountCents 必须为分整数');
-    const scaled = Number(rate);
-    if (!Number.isFinite(scaled) || scaled <= 0) throw new FxError('E_FX_UNAVAILABLE', '汇率非法');
-    return Math.round(amountCents * scaled);
+    if (!/^\d+(\.\d{1,6})?$/.test(rate)) throw new FxError('E_FX_UNAVAILABLE', `汇率格式非法：${rate}`);
+    const [intPart, fracPart = ''] = rate.split('.');
+    const scale = 1_000_000n;
+    const scaledRate = BigInt(intPart) * scale + BigInt(fracPart.padEnd(6, '0'));
+    if (scaledRate <= 0n) throw new FxError('E_FX_UNAVAILABLE', '汇率非法');
+    const numerator = BigInt(amountCents) * scaledRate + scale / 2n;
+    return Number(numerator / scale);
   }
 }

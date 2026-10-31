@@ -33,8 +33,14 @@ description: 从财务截图（记账 App/银行/证券）提取月度快照数�
 - `E_FX_UNAVAILABLE` → 该条目转 `pending[]`，禁止用陈旧汇率替代。
 
 ### 3. 配置与载荷组装
-- 调用 `mg_get_configs {month}` 获取 `treeConfigId`/`catConfigId`/叶子节点/二级分类/阈值；历史月同时拿到该月钉住的配置 id（纠错必须沿用钉住版本）。
-- 按 `config/recorder.schema.json` 组装录入载荷（金额全部分整数），`pending[]` 随载荷保留但不入库；节点/分类 id 无法对应 → 待确认。
+- 调用 `mg_get_configs {month}` 获取 `treeConfigId`/`catConfigId`/叶子节点/二级分类/`thresholdCents`（分整数；站点 `threshold` 是元，筛选大额时用 `thresholdCents`）；历史月同时拿到该月钉住的配置 id（纠错必须沿用钉住版本）。
+- **先调用 `mg_get_snapshot {month}` 取录入基线**（金额已归一为分整数）：
+  - `exists=false`（首次/历史补录）：
+    - `debtDefaults[]` → 填 `debts`：`debtId`、`name`、`fixedRepayment`、`monthlyPaymentCents`、`lastBalanceCents`。站点要求覆盖全部启用负债；`fixedRepayment=true` 时 `repaymentCents` 由服务端覆盖，但仍需占位填写。
+    - `carried[]` → 填沿用项：`nodeId`、`balanceCents`（必须等于上次 current 值）、`lastUpdatedMonth`；对应资产项的 `updateSource='carried'`。
+  - `exists=true`（已有快照）：沿用其 `assets[].nodeId`/`debts[].debtId`，只改本期变化项。
+- `updateSource` 规则：本期有截图数据 → `current`；无数据沿用上期 → `carried` 且余额必须等于上次 current 录入值（不等会被站点拒绝）。
+- 按 `config/recorder.schema.json` 组装录入载荷（金额全部分整数），`pending[]` 随载荷保留但不入库；节点/分类/负债 id 无法对应 → 待确认。
 
 ### 4. 写路径路由（脚本判定，不由提示词决定）
 - 调用 `mg_check_lock_window {month}` 得到 `writePath ∈ save|correct|reject`。

@@ -24,6 +24,6 @@ try {
 try {
   execFileSync('git', ['push', remote, branch], { stdio: 'inherit' });
 } catch {
-  process.stderr.write('E_VERIFY_FAILED: git push 失败（保留本地现场，报告用户）\n');
+  process.stderr.write('PUSH_FAILED: git push 失败（网络/权限）；保留本地现场并报告用户。推送前须已通过 mg-verify 全部验证\n');
   process.exit(1);
 }

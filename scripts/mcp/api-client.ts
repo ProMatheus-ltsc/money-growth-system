@@ -377,6 +377,7 @@ export class MgsClient {
       catConfigId: cat.configId,
       catVersion: cat.version,
       threshold: cat.threshold,
+      thresholdCents: yuanToCentsStrict(cat.threshold, 'threshold'),
       nodes: leaves,
       income: cat.income,
       expense: cat.expense,

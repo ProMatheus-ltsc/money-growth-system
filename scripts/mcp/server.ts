@@ -38,7 +38,7 @@ const TOOLS = [
   { name: 'mg_check_lock_window', description: '判定锁定与纠错窗口，返回 writePath=save|correct|reject', inputSchema: { type: 'object', required: ['month'], properties: { month: { type: 'string' } } } },
   { name: 'mg_save_snapshot', description: '保存快照：锁定月自动切纠错端点，未来月/超窗拒绝且零写请求；幂等键去重', inputSchema: { type: 'object', required: ['month', 'payload', 'idempotencyKey'], properties: { month: { type: 'string' }, payload: { type: 'object' }, idempotencyKey: { type: 'string' } } } },
   { name: 'mg_correct_snapshot', description: '纠错窗口内锁定月：patch 为部分录入载荷，基于该月钉住快照合并后提交', inputSchema: { type: 'object', required: ['month', 'patch', 'idempotencyKey'], properties: { month: { type: 'string' }, patch: { type: 'object' }, idempotencyKey: { type: 'string' } } } },
-  { name: 'mg_lookup_rate', description: '免费汇率查询（HKD/SGD/USD → CNY）；可传 amountCents 直接换算人民币分', inputSchema: { type: 'object', required: ['base'], properties: { base: { type: 'string', enum: ['HKD', 'SGD', 'USD', 'CNY'] }, quote: { type: 'string' }, amountCents: { type: 'integer' } } } },
+  { name: 'mg_lookup_rate', description: '免费汇率查询（HKD/SGD/USD → CNY）；可传 amountCents 直接换算人民币分', inputSchema: { type: 'object', required: ['base'], properties: { base: { type: 'string', enum: ['HKD', 'SGD', 'USD'] }, quote: { type: 'string', enum: ['CNY'] }, amountCents: { type: 'integer' } } } },
   { name: 'mg_prepare_checklist', description: '生成录入确认清单数据（含 items/pending/failures）', inputSchema: { type: 'object', required: ['items', 'writePath'], properties: { month: { type: 'string' }, items: { type: 'array' }, writePath: { type: 'string' }, statuses: { type: 'object' }, pending: { type: 'array' }, failures: { type: 'array' } } } },
 ];
 
@@ -122,8 +122,12 @@ export class MoneyGrowthServer {
         const exists = snap.exists === true;
         const path = decideWritePath(month, cur, exists);
         if (path === 'reject') {
-          const reason = month > cur ? '未来月份禁止保存' : '超出 20 个月纠错窗口';
-          return { written: false, writePath: 'rejected', zeroWrite: true, reason: `E_WINDOW_EXCEEDED: ${reason}` };
+          const reason = !/^\d{4}-(0[1-9]|1[0-2])$/.test(month)
+            ? 'E_SCHEMA: 月份格式应为 YYYY-MM'
+            : month > cur
+              ? 'E_WINDOW_EXCEEDED: 未来月份禁止保存'
+              : 'E_WINDOW_EXCEEDED: 目标月超出最近 20 个月纠错窗口，拒绝修改';
+          return { written: false, writePath: 'rejected', zeroWrite: true, reason };
         }
         const payload = this.assertPayload(args.payload, month);
         const prior = this.ledger.lookup(key);
@@ -150,8 +154,14 @@ export class MoneyGrowthServer {
         const month = String(args.month);
         const key = String(args.idempotencyKey);
         const cur = currentMonth();
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+          return { corrected: false, zeroWrite: true, reason: 'E_SCHEMA: 月份格式应为 YYYY-MM' };
+        }
+        if (month >= cur) {
+          return { corrected: false, zeroWrite: true, reason: 'E_SCHEMA: 当月/未来月请走保存（mg_save_snapshot），无需纠错' };
+        }
         if (!withinCorrectWindow(month, cur)) {
-          return { corrected: false, zeroWrite: true, reason: 'E_WINDOW_EXCEEDED: 不在最近 20 个月纠错窗口' };
+          return { corrected: false, zeroWrite: true, reason: 'E_WINDOW_EXCEEDED: 目标月超出最近 20 个月纠错窗口，拒绝修改' };
         }
         const prior = this.ledger.lookup(key);
         if (prior) {
@@ -172,24 +182,48 @@ export class MoneyGrowthServer {
       }
 
       case 'mg_lookup_rate': {
-        const base = String(args.base) as never;
-        const rate = await this.fx().lookupRate(base);
+        const base = String(args.base);
+        if (!['HKD', 'SGD', 'USD'].includes(base)) {
+          throw new MgsApiError('E_SCHEMA', 0, `不支持的币种：${base}（仅 HKD/SGD/USD）`);
+        }
+        if (args.quote !== undefined && args.quote !== 'CNY') {
+          throw new MgsApiError('E_SCHEMA', 0, `quote 仅支持 CNY，收到 ${String(args.quote)}`);
+        }
+        const rate = await this.fx().lookupRate(base as never);
         if (typeof args.amountCents === 'number') {
           return { ...rate, cnyCents: this.fx().convertCentsToCny(args.amountCents, rate.rate) };
         }
         return rate;
       }
 
-      case 'mg_prepare_checklist':
+      case 'mg_prepare_checklist': {
+        if (!Array.isArray(args.items)) {
+          throw new MgsApiError('E_SCHEMA', 0, 'items 必须为数组');
+        }
+        const items = (args.items as Record<string, unknown>[]).map((raw, index) => ({
+          category: String(raw.category ?? ''),
+          originalAmount: raw.originalAmount ?? null,
+          currency: String(raw.currency ?? 'CNY'),
+          rate: raw.rate ?? null,
+          rateSource: raw.rateSource ?? null,
+          rateFetchedAt: raw.rateFetchedAt ?? null,
+          cnyYuan: raw.cnyYuan ?? null,
+          storedCents: typeof raw.storedCents === 'number' ? raw.storedCents : null,
+          screenshotRef: String(raw.screenshotRef ?? ''),
+          writePath: String(raw.writePath ?? args.writePath ?? 'save'),
+          status: String(raw.status ?? 'ok'),
+          index,
+        }));
         return {
           month: args.month ?? null,
-          items: args.items ?? [],
+          items,
           writePath: args.writePath ?? 'save',
           statuses: args.statuses ?? {},
-          pending: args.pending ?? [],
-          failures: args.failures ?? [],
-          fingerprint: payloadFingerprint({ items: args.items ?? [], writePath: args.writePath }),
+          pending: Array.isArray(args.pending) ? args.pending : [],
+          failures: Array.isArray(args.failures) ? args.failures : [],
+          fingerprint: payloadFingerprint({ items, writePath: args.writePath }),
         };
+      }
 
       default:
         throw new Error(`TOOL_UNAVAILABLE: 未注册工具 ${tool}`);

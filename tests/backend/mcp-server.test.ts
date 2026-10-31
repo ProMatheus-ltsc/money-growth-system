@@ -61,3 +61,23 @@ describe('MCP stdio 协议', () => {
     expect(unknown.error.message).toContain('TOOL_UNAVAILABLE');
   });
 });
+
+describe('MCP 入参校验（E_SCHEMA）', () => {
+  it('mg_lookup_rate 拒绝非 HKD/SGD/USD 币种与非法 quote（不触网）', async () => {
+    const badBase = await rpc({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'mg_lookup_rate', arguments: { base: 'JPY' } } });
+    expect(badBase.result.isError).toBe(true);
+    expect(badBase.result.content[0].text).toContain('不支持的币种');
+    const badQuote = await rpc({ jsonrpc: '2.0', id: 8, method: 'tools/call', params: { name: 'mg_lookup_rate', arguments: { base: 'USD', quote: 'EUR' } } });
+    expect(badQuote.result.content[0].text).toContain('quote 仅支持 CNY');
+  });
+
+  it('mg_prepare_checklist 归一字段并拒绝非数组 items', async () => {
+    const bad = await rpc({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'mg_prepare_checklist', arguments: { items: 'x', writePath: 'save' } } });
+    expect(bad.result.isError).toBe(true);
+    const ok = await rpc({ jsonrpc: '2.0', id: 10, method: 'tools/call', params: { name: 'mg_prepare_checklist', arguments: { items: [{ category: '餐饮', storedCents: 800000, extra: 'drop' }], writePath: 'save' } } });
+    const data = JSON.parse(ok.result.content[0].text);
+    expect(data.items[0].storedCents).toBe(800000);
+    expect(data.items[0].currency).toBe('CNY');
+    expect(data.items[0].extra).toBeUndefined();
+  });
+});

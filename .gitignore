@@ -42,3 +42,6 @@ vendor/
 
 # wrangler 本地变量（含密钥，不入库）
 .dev.vars
+
+# Vitest 覆盖率产物（本地/CI 生成，不入库）
+coverage/

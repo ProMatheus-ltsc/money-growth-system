@@ -11,7 +11,7 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "lib": ["ES2022", "DOM"],
-    "types": ["node"]
+    "types": ["node", "@cloudflare/workers-types"]
   },
-  "include": ["../scripts/**/*.ts", "../backend/lib/*.ts"]
+  "include": ["../scripts/**/*.ts", "../backend/lib/*.ts", "../tests/**/*.ts"]
 }
