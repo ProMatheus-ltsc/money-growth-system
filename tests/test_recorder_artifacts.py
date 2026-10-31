@@ -46,11 +46,9 @@ def test_mcp_registration_declares_only_variable_names() -> None:
     config = _json(MCP_PATH)
     server = config["mcpServers"]["money-growth"]
     env_keys = set(server["env"])
-    assert {"MGS_URL", "MGS_INVITE_CODE", "MGS_USERNAME", "MGS_PASSWORD"} <= env_keys
-    assert all(server["env"][k] == "" for k in
-               ("MGS_URL", "MGS_INVITE_CODE", "MGS_USERNAME", "MGS_PASSWORD"))
-    # 若运行环境注入了凭据变量，其真实值绝不允许出现在注册文件里
-    for key in ("MGS_INVITE_CODE", "MGS_USERNAME", "MGS_PASSWORD"):
+    assert env_keys == {"MGS_ENV"}
+    for key in ("MGS_URL", "MGS_INVITE_CODE", "MGS_USERNAME", "MGS_PASSWORD"):
+        assert key not in server["env"]
         value = os.environ.get(key, "")
         if len(value) > 3:
             assert value not in text, key

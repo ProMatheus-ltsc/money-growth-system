@@ -3,7 +3,13 @@
  * 覆盖：未来月拒绝、当月 save、历史锁定月按窗口分流 correct / reject。
  */
 import { describe, it, expect } from 'vitest';
-import { decideWritePath, withinCorrectWindow } from '../../scripts/mcp/api-client.ts';
+import {
+  decideWritePath,
+  withinCorrectWindow,
+  snapshotToCents,
+  recorderPayloadFromSnapshot,
+  buildSiteBody,
+} from '../../scripts/mcp/api-client.ts';
 import { addMonths } from '../../backend/lib/month.ts';
 
 const CUR = '2026-10';
@@ -53,5 +59,51 @@ describe('withinCorrectWindow', () => {
   });
   it('未来月不在纠错窗口', () => {
     expect(withinCorrectWindow('2026-11', CUR)).toBe(false);
+  });
+});
+
+describe('元→分归一与纠错基线', () => {
+  const raw = {
+    exists: true,
+    month: '2026-09',
+    treeConfigId: 2,
+    catConfigId: 4,
+    assets: [{ nodeId: 11, balance: 1234.56, hasNewFunds: true, updateSource: 'current' }],
+    moduleGains: [{ nodeId: 11, gain: 12.5 }],
+    income: [{ catItemId: 21, amount: 100 }],
+    expense: [{ catItemId: 22, amount: 30.25 }],
+    largeItems: [{ id: 1, direction: 'expense', catItemId: 22, name: '电脑', amount: 1000 }],
+    debts: [{ debtId: 1, balance: 500, repayment: 20, fixedRepayment: true }],
+    totals: { totalAssets: 1234.56, totalDebt: 500, netWorth: 734.56 },
+  };
+
+  it('snapshotToCents 全部换算为分整数', () => {
+    const cents = snapshotToCents(raw) as Record<string, any>;
+    expect(cents.assets[0].balanceCents).toBe(123456);
+    expect(cents.moduleGains[0].gainCents).toBe(1250);
+    expect(cents.income[0].amountCents).toBe(10000);
+    expect(cents.expense[0].amountCents).toBe(3025);
+    expect(cents.largeItems[0].amountCents).toBe(100000);
+    expect(cents.debts[0].repaymentCents).toBe(2000);
+    expect(cents.totals.netWorthCents).toBe(73456);
+  });
+
+  it('不存在月份返回 {exists:false}', () => {
+    expect(snapshotToCents(null)).toEqual({ exists: false });
+    expect(snapshotToCents({ exists: false })).toEqual({ exists: false });
+  });
+
+  it('纠错基线保留钉住配置 id 且可回写为站点 body', () => {
+    const payload = recorderPayloadFromSnapshot(snapshotToCents(raw));
+    expect(payload.treeConfigId).toBe(2);
+    expect(payload.catConfigId).toBe(4);
+    const body = buildSiteBody(payload) as Record<string, any>;
+    expect(body.assets[0].balance).toBe(1234.56);
+    expect(body.debts[0].repayment).toBe(20);
+  });
+
+  it('超两位小数的站点金额视为口径异常', () => {
+    const bad = { ...raw, assets: [{ nodeId: 11, balance: 1.005, hasNewFunds: false, updateSource: 'current' }] };
+    expect(() => snapshotToCents(bad)).toThrow('两位小数');
   });
 });

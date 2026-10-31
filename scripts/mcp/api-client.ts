@@ -61,13 +61,18 @@ export function parseEnvFile(text: string): Record<string, string> {
   return out;
 }
 
-/** 凭据装载：process.env 优先，缺失项回落 env 文件；缺项报 E_SCHEMA 且只回显变量名 */
+/** 凭据装载：process.env 优先（空白串视为未设置），缺失项回落 env 文件；缺项报 E_SCHEMA 且只回显变量名 */
 export function loadCredentials(env: Record<string, string | undefined> = process.env): Credentials {
   let fileVars: Record<string, string> = {};
-  const rawPath = env.MGS_ENV ?? resolve(homedir(), 'secrets/money-growth.env');
+  const rawPath = (env.MGS_ENV ?? '').trim() || resolve(homedir(), 'secrets/money-growth.env');
   const path = rawPath.startsWith('~') ? resolve(homedir(), rawPath.slice(2)) : rawPath;
   if (existsSync(path)) fileVars = parseEnvFile(readFileSync(path, 'utf8'));
-  const pick = (k: string): string | undefined => env[k] ?? fileVars[k];
+  const pick = (k: string): string | undefined => {
+    const fromEnv = env[k];
+    if (typeof fromEnv === 'string' && fromEnv.trim()) return fromEnv.trim();
+    const fromFile = fileVars[k];
+    return typeof fromFile === 'string' && fromFile.trim() ? fromFile.trim() : undefined;
+  };
   const missing = ['MGS_URL', 'MGS_INVITE_CODE', 'MGS_USERNAME', 'MGS_PASSWORD'].filter((k) => !pick(k));
   if (missing.length > 0) {
     throw new MgsApiError('E_SCHEMA', 0, `缺少凭据变量：${missing.join(', ')}（请配置仓库外 ${path}）`);
@@ -225,7 +230,7 @@ export class MgsClient {
     const errCode = json?.error?.code ?? '';
     if (!json || !json.success) {
       const message = json?.error?.message ?? `HTTP ${res.status}`;
-      throw this.mapError(res.status, errCode, message, json?.error?.details, path, opts);
+      throw this.mapError(res.status, errCode, message, json?.error?.details, method, path, opts);
     }
     return json.data as T;
   }
@@ -235,8 +240,9 @@ export class MgsClient {
     code: string,
     message: string,
     details: unknown,
+    method: string,
     path: string,
-    opts: { allowRelogin?: boolean }
+    opts: { auth?: boolean; allowRelogin?: boolean }
   ): MgsApiError {
     if (status === 423 || code === 'LOCKED_OUT') {
       return new MgsApiError('E_AUTH_LOCKED', status, `登录限速锁定：${message}（不得重试，等待解锁或报告用户）`, details);
@@ -258,7 +264,7 @@ export class MgsClient {
     if (code === 'INVALID' || code === 'INVALID_PARAM') {
       return new MgsApiError('E_SCHEMA', status, `参数校验失败：${message}`, details);
     }
-    return new MgsApiError(code || `HTTP_${status}`, status, `${methodOf(path)} ${path} 失败：${message}`, details);
+    return new MgsApiError(code || `HTTP_${status}`, status, `${method} ${path} 失败：${message}`, details);
   }
 
   /** 三步鉴权：verify-invite → login → Bearer；LOCKED_OUT 熔断不重试 */
@@ -349,18 +355,150 @@ export class MgsClient {
     );
   }
 
-  /** 当前资产树/分类配置 id 与候选项（server 端配置读取辅助） */
-  async getTreeConfig(): Promise<Record<string, unknown>> {
-    return this.withRelogin(() => this.http<Record<string, unknown>>('/api/tree', 'GET'));
-  }
-
-  async getCatConfig(): Promise<Record<string, unknown>> {
-    return this.withRelogin(() => this.http<Record<string, unknown>>('/api/cat-configs', 'GET'));
+  /** 当前资产树/分类配置（含叶子节点与二级分类候选，供首次录入组装载荷） */
+  async getConfigs(): Promise<Record<string, unknown>> {
+    const [tree, cat] = await Promise.all([
+      this.withRelogin(() => this.http<Record<string, unknown>>('/api/tree', 'GET')),
+      this.withRelogin(() => this.http<Record<string, unknown>>('/api/cat-configs', 'GET')),
+    ]);
+    const nodes = (tree.nodes ?? []) as Record<string, unknown>[];
+    const leaves = nodes
+      .filter((n) => n.parentId !== null && n.enabled === true)
+      .map((n) => ({
+        id: n.id,
+        parentId: n.parentId,
+        name: n.name,
+        updateFreq: n.updateFreq,
+        isPlaceholder: n.isPlaceholder,
+      }));
+    return {
+      treeConfigId: tree.configId,
+      treeVersion: tree.version,
+      catConfigId: cat.configId,
+      catVersion: cat.version,
+      threshold: cat.threshold,
+      nodes: leaves,
+      income: cat.income,
+      expense: cat.expense,
+    };
   }
 }
 
-function methodOf(path: string): string {
-  return path.includes('/correct') ? 'POST' : 'HTTP';
+/** 元（站点 API 口径）→ 分整数；非整数分视为口径异常 */
+export function yuanToCentsStrict(v: unknown, field: string): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) {
+    throw new MgsApiError('E_SCHEMA', 0, `${field} 不是有效数值：${String(v)}`);
+  }
+  const cents = Math.round(v * 100);
+  if (Math.abs(v * 100 - cents) > 1e-6) {
+    throw new MgsApiError('E_SCHEMA', 0, `${field} 超过两位小数：${v}`);
+  }
+  return cents;
+}
+
+/** 站点快照（元）→ 录入模型（分整数），供读回比对与 mg_get_snapshot 输出 */
+export function snapshotToCents(raw: Record<string, unknown> | null): Record<string, unknown> {
+  if (!raw) return { exists: false };
+  if (raw.exists === false) return { ...raw, exists: false };
+  const asObj = (v: unknown): Record<string, unknown>[] =>
+    Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
+  const totals = (raw.totals ?? {}) as Record<string, unknown>;
+  return {
+    ...raw,
+    assets: asObj(raw.assets).map((a) => ({
+      ...a,
+      balanceCents: yuanToCentsStrict(a.balance, 'assets.balance'),
+    })),
+    moduleGains: asObj(raw.moduleGains).map((g) => ({
+      nodeId: g.nodeId,
+      gainCents: g.gain === null || g.gain === undefined ? null : yuanToCentsStrict(g.gain, 'moduleGains.gain'),
+    })),
+    income: asObj(raw.income).map((i) => ({
+      catItemId: i.catItemId,
+      amountCents: yuanToCentsStrict(i.amount, 'income.amount'),
+    })),
+    expense: asObj(raw.expense).map((i) => ({
+      catItemId: i.catItemId,
+      amountCents: yuanToCentsStrict(i.amount, 'expense.amount'),
+    })),
+    largeItems: asObj(raw.largeItems).map((l) => ({
+      ...l,
+      amountCents: yuanToCentsStrict(l.amount, 'largeItems.amount'),
+    })),
+    debts: asObj(raw.debts).map((d) => ({
+      ...d,
+      balanceCents: yuanToCentsStrict(d.balance, 'debts.balance'),
+      repaymentCents: yuanToCentsStrict(d.repayment, 'debts.repayment'),
+    })),
+    totals: {
+      totalAssetsCents: yuanToCentsStrict(totals.totalAssets, 'totals.totalAssets'),
+      totalDebtCents: yuanToCentsStrict(totals.totalDebt, 'totals.totalDebt'),
+      netWorthCents: yuanToCentsStrict(totals.netWorth, 'totals.netWorth'),
+    },
+  };
+}
+
+/** 站点快照（分模型）→ 完整录入载荷（纠错时以钉住版本为基线再合并补丁） */
+export function recorderPayloadFromSnapshot(
+  snap: Record<string, unknown>
+): RecorderPayload {
+  if (snap.exists === false) {
+    throw new MgsApiError('E_SCHEMA', 0, '目标月无快照，无法生成纠错基线');
+  }
+  const cents = snap.assets as { balanceCents?: number }[] | undefined;
+  if (!cents || cents.some((a) => typeof a.balanceCents !== 'number')) {
+    throw new MgsApiError('E_SCHEMA', 0, '快照未按分口径归一，拒绝生成纠错基线');
+  }
+  return {
+    treeConfigId: Number(snap.treeConfigId),
+    catConfigId: Number(snap.catConfigId),
+    assets: (snap.assets as Record<string, unknown>[]).map((a) => ({
+      nodeId: Number(a.nodeId),
+      balanceCents: Number(a.balanceCents),
+      hasNewFunds: Boolean(a.hasNewFunds),
+      updateSource: (a.updateSource === 'carried' ? 'carried' : 'current') as 'current' | 'carried',
+    })),
+    moduleGains: ((snap.moduleGains ?? []) as Record<string, unknown>[]).map((g) => ({
+      nodeId: Number(g.nodeId),
+      gainCents: g.gainCents === null || g.gainCents === undefined ? null : Number(g.gainCents),
+    })),
+    income: ((snap.income ?? []) as Record<string, unknown>[]).map((i) => ({
+      catItemId: Number(i.catItemId),
+      amountCents: Number(i.amountCents),
+    })),
+    expense: ((snap.expense ?? []) as Record<string, unknown>[]).map((i) => ({
+      catItemId: Number(i.catItemId),
+      amountCents: Number(i.amountCents),
+    })),
+    largeItems: ((snap.largeItems ?? []) as Record<string, unknown>[]).map((l) => ({
+      direction: (l.direction === 'income' ? 'income' : 'expense') as 'income' | 'expense',
+      catItemId: Number(l.catItemId),
+      name: String(l.name),
+      amountCents: Number(l.amountCents),
+    })),
+    debts: ((snap.debts ?? []) as Record<string, unknown>[]).map((d) => ({
+      debtId: Number(d.debtId),
+      balanceCents: Number(d.balanceCents),
+      repaymentCents: Number(d.repaymentCents),
+    })),
+  };
+}
+
+/** 出站白名单 fetch：只允许 MGS_URL 主机 + 两个免费汇率源主机 */
+export function guardedFetch(allowedHosts: Iterable<string>): FetchLike {
+  const allow = new Set(Array.from(allowedHosts, (h) => h.toLowerCase()));
+  return async (url, init) => {
+    let host: string;
+    try {
+      host = new URL(url).hostname.toLowerCase();
+    } catch {
+      throw new MgsApiError('E_SCHEMA', 0, `非法出站地址：${url}`);
+    }
+    if (!allow.has(host)) {
+      throw new MgsApiError('E_SCHEMA', 0, `出站被拒绝（不在白名单）：${host}`);
+    }
+    return (await fetch(url, init as RequestInit)) as Awaited<ReturnType<FetchLike>>;
+  };
 }
 
 /** 供 fetch 注入的默认实现 */

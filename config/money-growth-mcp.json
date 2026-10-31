@@ -7,17 +7,14 @@
       "args": ["scripts/mcp/server.ts"],
       "cwd": "<仓库根绝对路径>",
       "env": {
-        "MGS_ENV": "~/secrets/money-growth.env",
-        "MGS_URL": "",
-        "MGS_INVITE_CODE": "",
-        "MGS_USERNAME": "",
-        "MGS_PASSWORD": ""
+        "MGS_ENV": "~/secrets/money-growth.env"
       },
       "notes": {
-        "credentials": "MGS_* 变量留空表示由 MGS_ENV 文件注入；切勿在本文件填写真实值",
-        "requires": "Node >= 22.6（类型擦除运行 .ts）",
+        "credentials": "不要在 env 中填写 MGS_URL/MGS_INVITE_CODE/MGS_USERNAME/MGS_PASSWORD；缺失项由 MGS_ENV 文件注入（空白串视为未设置）",
+        "requires": "Node >= 22.18（.ts 类型擦除默认开启）；22.6~22.17 需加 --experimental-strip-types",
         "tools": [
           "mg_verify_auth",
+          "mg_get_configs",
           "mg_get_snapshot",
           "mg_check_lock_window",
           "mg_save_snapshot",
@@ -25,7 +22,7 @@
           "mg_lookup_rate",
           "mg_prepare_checklist"
         ],
-        "egressAllowlist": "MGS_URL 主机 + api.frankfurter.dev + open.er-api.com",
+        "egressAllowlist": "MGS_URL 主机 + api.frankfurter.dev + open.er-api.com（guardedFetch 强制校验）",
         "timeoutMs": 20000
       }
     }

@@ -31,6 +31,7 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 let allOk = true;
 
 allOk = run('typecheck', npm, ['run', 'typecheck']) && allOk;
+allOk = run('support-typecheck', npm, ['run', 'typecheck:agent']) && allOk;
 if (!args.has('--skip-build')) allOk = run('build', npm, ['run', 'build']) && allOk;
 allOk = run('unit', npm, ['test', '--', '--run']) && allOk;
 

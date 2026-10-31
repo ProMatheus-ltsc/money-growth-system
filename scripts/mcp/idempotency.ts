@@ -37,23 +37,25 @@ export function idempotencyKey(input: IdempotencyInput): string {
 }
 
 /**
- * 内存幂等登记表（进程内去重）。落盘由调用方决定，本模块保持无副作用以便单测。
- * markIfAbsent 返回 true 表示首次登记；false 表示命中既有键（应转 E_DUP_IDEMPOTENT 读回比对）。
+ * 进程内幂等登记表。仅在写成功（或确证命中既有结果）后 record，
+ * 写失败不得登记，避免把「从未写入」误报为幂等命中。
  */
 export class IdempotencyLedger {
-  private readonly seen = new Set<string>();
+  private readonly results = new Map<string, Record<string, unknown>>();
 
-  markIfAbsent(key: string): boolean {
-    if (this.seen.has(key)) return false;
-    this.seen.add(key);
-    return true;
+  record(key: string, result: Record<string, unknown>): void {
+    this.results.set(key, result);
+  }
+
+  lookup(key: string): Record<string, unknown> | null {
+    return this.results.get(key) ?? null;
   }
 
   has(key: string): boolean {
-    return this.seen.has(key);
+    return this.results.has(key);
   }
 
   clear(): void {
-    this.seen.clear();
+    this.results.clear();
   }
 }

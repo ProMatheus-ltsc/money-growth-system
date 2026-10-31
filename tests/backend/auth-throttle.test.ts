@@ -52,3 +52,45 @@ describe('maskSecret', () => {
     expect(maskSecret(undefined)).toBe('<unset>');
   });
 });
+
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { loadCredentials, parseEnvFile } from '../../scripts/mcp/api-client.ts';
+
+describe('loadCredentials（空白环境变量不遮蔽 env 文件）', () => {
+  it('空白串视为未设置，回落 env 文件', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mgs-cred-'));
+    const file = join(dir, 'money.env');
+    writeFileSync(
+      file,
+      ['# comment', 'MGS_URL=https://example.test', 'MGS_INVITE_CODE=CODE1', 'MGS_USERNAME=user1', 'MGS_PASSWORD=pass1'].join('\n')
+    );
+    try {
+      const creds = loadCredentials({ MGS_ENV: file, MGS_URL: '', MGS_USERNAME: '   ' });
+      expect(creds.baseUrl).toBe('https://example.test');
+      expect(creds.inviteCode).toBe('CODE1');
+      expect(creds.username).toBe('user1');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('缺变量报 E_SCHEMA 且只回显变量名', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mgs-cred-'));
+    try {
+      expect(() => loadCredentials({ MGS_ENV: join(dir, 'missing.env') })).toThrowError(/MGS_URL/);
+      try {
+        loadCredentials({ MGS_ENV: join(dir, 'missing.env') });
+      } catch (e) {
+        expect((e as { code?: string }).code).toBe('E_SCHEMA');
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('parseEnvFile 处理引号与注释', () => {
+    expect(parseEnvFile('# x\nA=1\nB="2 3"\n')).toEqual({ A: '1', B: '2 3' });
+  });
+});
