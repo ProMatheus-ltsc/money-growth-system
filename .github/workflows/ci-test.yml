@@ -1,0 +1,25 @@
+# 单元测试必跑（REQ-007 / COMP-005）：任何 push / PR 触发回归保护。
+# 站点依赖含 file:../shared-core，CI 用最小 stub 满足安装后跑 npm test（含覆盖率阈值）。
+name: test
+on:
+  push:
+  pull_request:
+
+jobs:
+  vitest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.18'
+      - name: Stub sibling @shared/core (file: dependency not on CI)
+        run: |
+          mkdir -p ../shared-core/src
+          printf '{"name":"@shared/core","version":"0.0.0","type":"module","main":"src/index.ts"}\n' > ../shared-core/package.json
+          printf 'export {};\n' > ../shared-core/src/index.ts
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run unit tests with coverage
+        run: npm test -- --coverage

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "npm run typecheck && vite build",
+    "test": "vitest run --config config/vitest.config.ts",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.backend.json",
     "pages:dev": "wrangler pages dev dist",
@@ -33,12 +34,14 @@
     "@types/react-dom": "^18.3.0",
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.3.1",
+    "@vitest/coverage-v8": "^2.1.9",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.45",
     "tailwindcss": "^3.4.10",
     "tailwindcss-animate": "^1.0.7",
     "typescript": "^5.5.4",
     "vite": "^5.4.3",
+    "vitest": "^2.1.9",
     "wrangler": "^4.125.0"
   }
 }
