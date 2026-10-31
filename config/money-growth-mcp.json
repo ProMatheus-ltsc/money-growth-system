@@ -1,0 +1,33 @@
+{
+  "$comment": "money-growth MCP server 注册（stdio）。凭据真实值只存于仓库外 MGS_ENV 文件，本文件只声明变量名。",
+  "mcpServers": {
+    "money-growth": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["scripts/mcp/server.ts"],
+      "cwd": "<仓库根绝对路径>",
+      "env": {
+        "MGS_ENV": "~/secrets/money-growth.env",
+        "MGS_URL": "",
+        "MGS_INVITE_CODE": "",
+        "MGS_USERNAME": "",
+        "MGS_PASSWORD": ""
+      },
+      "notes": {
+        "credentials": "MGS_* 变量留空表示由 MGS_ENV 文件注入；切勿在本文件填写真实值",
+        "requires": "Node >= 22.6（类型擦除运行 .ts）",
+        "tools": [
+          "mg_verify_auth",
+          "mg_get_snapshot",
+          "mg_check_lock_window",
+          "mg_save_snapshot",
+          "mg_correct_snapshot",
+          "mg_lookup_rate",
+          "mg_prepare_checklist"
+        ],
+        "egressAllowlist": "MGS_URL 主机 + api.frankfurter.dev + open.er-api.com",
+        "timeoutMs": 20000
+      }
+    }
+  }
+}

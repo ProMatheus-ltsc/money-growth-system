@@ -1,0 +1,19 @@
+# 单元测试必跑（REQ-007 / COMP-005）：任何 push / PR 触发回归保护。
+# 说明：站点依赖含 file:../shared-core，CI 无法整树安装；本工作流只跑零依赖的
+# Vitest 纯模块回归（backend/lib + scripts/mcp），用 npx 独立安装 vitest。
+name: test
+on:
+  push:
+  pull_request:
+
+jobs:
+  vitest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run unit tests (no site deps required)
+        run: npx --yes vitest@2.1.9 run --config config/vitest.config.ts
