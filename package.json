@@ -9,7 +9,6 @@
     "test": "vitest run --config config/vitest.config.ts",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.backend.json",
-    "typecheck:agent": "tsc --noEmit -p config/tsconfig.mcp.json",
     "pages:dev": "wrangler pages dev dist",
     "db:migrate:local": "wrangler d1 migrations apply fam-asset-db --local"
   },
