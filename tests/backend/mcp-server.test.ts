@@ -81,3 +81,33 @@ describe('MCP 入参校验（E_SCHEMA）', () => {
     expect(data.items[0].extra).toBeUndefined();
   });
 });
+
+describe('确认清单顶层字段（TC-013 schema）', () => {
+  it('返回 month/items/path/status，部分失败时逐条标注', async () => {
+    const res = await rpc({
+      jsonrpc: '2.0', id: 11, method: 'tools/call',
+      params: { name: 'mg_prepare_checklist', arguments: {
+        month: '2026-10',
+        items: [{ category: '餐饮', originalAmount: 120, currency: 'CNY', cnyYuan: 120, storedCents: 12000, screenshotRef: 'a.png', status: 'ok' }],
+        writePath: 'save',
+        failures: [{ item: '交通', error: 'catItemId 不存在' }],
+      } },
+    });
+    const data = JSON.parse(res.result.content[0].text);
+    for (const key of ['month', 'items', 'path', 'status']) expect(data).toHaveProperty(key);
+    expect(data.month).toBe('2026-10');
+    expect(data.path).toBe('templates/mg-checklist.html');
+    expect(data.status).toBe('failed');
+    expect(data.failures[0].error).toContain('catItemId');
+  });
+
+  it('仅有待确认项时状态为 partial', async () => {
+    const res = await rpc({
+      jsonrpc: '2.0', id: 12, method: 'tools/call',
+      params: { name: 'mg_prepare_checklist', arguments: { items: [], writePath: 'save', pending: [{ field: 'assets[0].balance', reason: 'low_confidence' }] } },
+    });
+    const data = JSON.parse(res.result.content[0].text);
+    expect(data.status).toBe('partial');
+    expect(data.pending).toHaveLength(1);
+  });
+});

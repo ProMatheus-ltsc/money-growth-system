@@ -106,3 +106,18 @@ describe('convertCentsToCny（分整数精确换算）', () => {
     expect(() => svc.convertCentsToCny(100, '0')).toThrow();
   });
 });
+
+describe('汇率源可注入（S7 TC-004 降级场景）', () => {
+  it('deps.primaryUrl/fallbackUrl 覆盖默认源，主备全挂抛 E_FX_UNAVAILABLE', async () => {
+    const calls: string[] = [];
+    const svc = new FxService({
+      fetchImpl: async (url: string) => { calls.push(url); return { ok: false, status: 503, json: async () => ({}) }; },
+      now: () => Date.now(),
+      primaryUrl: (base) => `http://127.0.0.1:9999/fx?base=${base}`,
+      fallbackUrl: (base) => `http://127.0.0.1:9999/fx2?base=${base}`,
+    });
+    await expect(svc.lookupRate('HKD')).rejects.toMatchObject({ code: 'E_FX_UNAVAILABLE' });
+    expect(calls[0]).toContain('127.0.0.1:9999/fx?base=HKD');
+    expect(calls[1]).toContain('127.0.0.1:9999/fx2?base=HKD');
+  });
+});

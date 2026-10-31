@@ -23,6 +23,7 @@
           "mg_prepare_checklist"
         ],
         "egressAllowlist": "MGS_URL 主机 + api.frankfurter.dev + open.er-api.com（guardedFetch 强制校验）",
+        "fxTestHooks": "可选 MGS_FX_PRIMARY_URL / MGS_FX_FALLBACK_URL（含 {base} 占位）用于本地 stub 注入；仅测试环境设置，缺省走免费源",
         "timeoutMs": 20000
       }
     }

@@ -9,6 +9,7 @@ import {
   snapshotToCents,
   recorderPayloadFromSnapshot,
   buildSiteBody,
+  mergeRecorderPayload,
 } from '../../scripts/mcp/api-client.ts';
 import { addMonths } from '../../backend/lib/month.ts';
 
@@ -121,5 +122,45 @@ describe('元→分归一与纠错基线', () => {
   it('超两位小数的站点金额视为口径异常', () => {
     const bad = { ...raw, assets: [{ nodeId: 11, balance: 1.005, hasNewFunds: false, updateSource: 'current' }] };
     expect(() => snapshotToCents(bad)).toThrow('两位小数');
+  });
+});
+
+describe('mergeRecorderPayload（纠错补丁按业务键合并）', () => {
+  const base = {
+    treeConfigId: 2,
+    catConfigId: 4,
+    assets: [
+      { nodeId: 11, balanceCents: 100, hasNewFunds: false, updateSource: 'current' as const },
+      { nodeId: 12, balanceCents: 200, hasNewFunds: false, updateSource: 'current' as const },
+    ],
+    income: [{ catItemId: 21, amountCents: 1000 }],
+    expense: [{ catItemId: 31, amountCents: 500 }],
+    debts: [{ debtId: 1, balanceCents: 900, repaymentCents: 50 }],
+  };
+
+  it('只改一个分类金额，其余条目保留', () => {
+    const merged = mergeRecorderPayload(base, { income: [{ catItemId: 21, amountCents: 2000 }] });
+    expect(merged.income).toEqual([{ catItemId: 21, amountCents: 2000 }]);
+    expect(merged.expense).toEqual(base.expense);
+    expect(merged.assets).toHaveLength(2);
+    expect(merged.treeConfigId).toBe(2);
+  });
+
+  it('新增条目与既有条目并存；钉住配置 id 不可被补丁改动', () => {
+    const merged = mergeRecorderPayload(base, {
+      assets: [{ nodeId: 13, balanceCents: 300, hasNewFunds: true, updateSource: 'current' }],
+      treeConfigId: 99,
+      catConfigId: 99,
+    } as any);
+    expect(merged.assets.map((a) => a.nodeId).sort()).toEqual([11, 12, 13]);
+    expect(merged.treeConfigId).toBe(2);
+    expect(merged.catConfigId).toBe(4);
+  });
+
+  it('大额条目按 direction+catItemId+name 合并', () => {
+    const b = { ...base, largeItems: [{ direction: 'expense' as const, catItemId: 31, name: '年夜饭', amountCents: 100 }] };
+    const merged = mergeRecorderPayload(b, { largeItems: [{ direction: 'expense', catItemId: 31, name: '年夜饭', amountCents: 200 }] });
+    expect(merged.largeItems).toHaveLength(1);
+    expect(merged.largeItems![0].amountCents).toBe(200);
   });
 });

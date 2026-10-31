@@ -17,9 +17,12 @@ export interface RateResult {
 }
 
 export class FxError extends Error {
-  constructor(public readonly code: 'E_FX_UNAVAILABLE' | 'E_FX_STALE', message: string) {
+  readonly code: 'E_FX_UNAVAILABLE' | 'E_FX_STALE';
+
+  constructor(code: 'E_FX_UNAVAILABLE' | 'E_FX_STALE', message: string) {
     super(message);
     this.name = 'FxError';
+    this.code = code;
   }
 }
 
@@ -33,12 +36,21 @@ export interface FxDeps {
   fetchImpl: FetchLike;
   now: () => number;
   timeoutMs?: number;
+  /** 测试/私有部署可覆盖（支持 {base} 占位）；缺省用免费源 */
+  primaryUrl?: (base: FxCode) => string;
+  fallbackUrl?: (base: FxCode) => string;
 }
 
-const PRIMARY_URL = (base: FxCode): string =>
+const DEFAULT_PRIMARY = (base: FxCode): string =>
   `https://api.frankfurter.dev/v1/latest?base=${base}&symbols=CNY`;
-const FALLBACK_URL = (base: FxCode): string =>
+const DEFAULT_FALLBACK = (base: FxCode): string =>
   `https://open.er-api.com/v6/latest/${base}`;
+
+function envUrl(name: string, fallback: (base: FxCode) => string): (base: FxCode) => string {
+  const template = (process.env[name] ?? '').trim();
+  if (!template) return fallback;
+  return (base) => template.replace('{base}', base);
+}
 
 const FRESH_MS = 20 * 3600_000; // 20h 内直接命中缓存
 const STALE_MS = 24 * 3600_000; // 超 24h 视为陈旧：必须刷新
@@ -67,9 +79,13 @@ function toRateString(rate: number): string {
 export class FxService {
   private readonly cache = new Map<FxCode, CacheEntry>();
   private readonly deps: FxDeps;
+  private readonly primaryUrl: (base: FxCode) => string;
+  private readonly fallbackUrl: (base: FxCode) => string;
 
   constructor(deps: FxDeps) {
     this.deps = { timeoutMs: 20_000, ...deps };
+    this.primaryUrl = deps.primaryUrl ?? envUrl('MGS_FX_PRIMARY_URL', DEFAULT_PRIMARY);
+    this.fallbackUrl = deps.fallbackUrl ?? envUrl('MGS_FX_FALLBACK_URL', DEFAULT_FALLBACK);
   }
 
   private async fetchJson(url: string): Promise<unknown | null> {
@@ -100,7 +116,7 @@ export class FxService {
         this.cache.delete(base);
       }
     }
-    const primary = await this.fetchJson(PRIMARY_URL(base));
+    const primary = await this.fetchJson(this.primaryUrl(base));
     const p = parseRate(primary, base);
     if (p !== null) {
       const result: RateResult = {
@@ -111,7 +127,7 @@ export class FxService {
       this.cache.set(base, { result, atMs: this.deps.now() });
       return result;
     }
-    const fallbackRaw = await this.fetchJson(FALLBACK_URL(base));
+    const fallbackRaw = await this.fetchJson(this.fallbackUrl(base));
     const f = parseRate(fallbackRaw, base);
     if (f !== null) {
       const result: RateResult = {

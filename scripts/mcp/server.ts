@@ -22,6 +22,7 @@ import {
   buildSiteBody,
   snapshotToCents,
   recorderPayloadFromSnapshot,
+  mergeRecorderPayload,
   type RecorderPayload,
 } from './api-client.ts';
 import { FxService } from './fx.ts';
@@ -39,7 +40,7 @@ const TOOLS = [
   { name: 'mg_save_snapshot', description: '保存快照：锁定月自动切纠错端点，未来月/超窗拒绝且零写请求；幂等键去重', inputSchema: { type: 'object', required: ['month', 'payload', 'idempotencyKey'], properties: { month: { type: 'string' }, payload: { type: 'object' }, idempotencyKey: { type: 'string' } } } },
   { name: 'mg_correct_snapshot', description: '纠错窗口内锁定月：patch 为部分录入载荷，基于该月钉住快照合并后提交', inputSchema: { type: 'object', required: ['month', 'patch', 'idempotencyKey'], properties: { month: { type: 'string' }, patch: { type: 'object' }, idempotencyKey: { type: 'string' } } } },
   { name: 'mg_lookup_rate', description: '免费汇率查询（HKD/SGD/USD → CNY）；可传 amountCents 直接换算人民币分', inputSchema: { type: 'object', required: ['base'], properties: { base: { type: 'string', enum: ['HKD', 'SGD', 'USD'] }, quote: { type: 'string', enum: ['CNY'] }, amountCents: { type: 'integer' } } } },
-  { name: 'mg_prepare_checklist', description: '生成录入确认清单数据（含 items/pending/failures）', inputSchema: { type: 'object', required: ['items', 'writePath'], properties: { month: { type: 'string' }, items: { type: 'array' }, writePath: { type: 'string' }, statuses: { type: 'object' }, pending: { type: 'array' }, failures: { type: 'array' } } } },
+  { name: 'mg_prepare_checklist', description: '生成录入确认清单数据（month/items/path/status + pending/failures）', inputSchema: { type: 'object', required: ['items', 'writePath'], properties: { month: { type: 'string' }, items: { type: 'array' }, writePath: { type: 'string' }, statuses: { type: 'object' }, pending: { type: 'array' }, failures: { type: 'array' }, path: { type: 'string' }, status: { type: 'string' } } } },
 ];
 
 export class MoneyGrowthServer {
@@ -58,8 +59,18 @@ export class MoneyGrowthServer {
 
   private fx(): FxService {
     if (!this.fxService) {
+      const extra: string[] = [];
+      for (const name of ['MGS_FX_PRIMARY_URL', 'MGS_FX_FALLBACK_URL']) {
+        const template = (process.env[name] ?? '').trim();
+        if (!template) continue;
+        try {
+          extra.push(new URL(template.replace('{base}', 'HKD')).hostname);
+        } catch {
+          throw new MgsApiError('E_SCHEMA', 0, `${name} 不是合法 URL 模板`);
+        }
+      }
       this.fxService = new FxService({
-        fetchImpl: guardedFetch(FX_HOSTS) as never,
+        fetchImpl: guardedFetch([...FX_HOSTS, ...extra]) as never,
         now: () => Date.now(),
       });
     }
@@ -173,7 +184,7 @@ export class MoneyGrowthServer {
         }
         const pinned = recorderPayloadFromSnapshot(snap);
         const patch = (args.patch ?? {}) as Partial<RecorderPayload>;
-        const merged: RecorderPayload = { ...pinned, ...patch, treeConfigId: pinned.treeConfigId, catConfigId: pinned.catConfigId };
+        const merged = mergeRecorderPayload(pinned, patch);
         this.assertPayload(merged, month);
         const result = await this.mgs().correctSnapshot(month, buildSiteBody(merged));
         const record = { corrected: true, writePath: 'correct', idempotentHit: false, correctedAt: result.correctedAt, readbackDiff: result.diff };
@@ -214,13 +225,18 @@ export class MoneyGrowthServer {
           status: String(raw.status ?? 'ok'),
           index,
         }));
+        const failures = Array.isArray(args.failures) ? args.failures : [];
+        const pendingItems = Array.isArray(args.pending) ? args.pending : [];
+        const overall = failures.length > 0 ? 'failed' : pendingItems.length > 0 ? 'partial' : 'ok';
         return {
           month: args.month ?? null,
           items,
           writePath: args.writePath ?? 'save',
+          path: typeof args.path === 'string' && args.path.trim() ? args.path : 'templates/mg-checklist.html',
+          status: typeof args.status === 'string' && args.status.trim() ? args.status : overall,
           statuses: args.statuses ?? {},
-          pending: Array.isArray(args.pending) ? args.pending : [],
-          failures: Array.isArray(args.failures) ? args.failures : [],
+          pending: pendingItems,
+          failures,
           fingerprint: payloadFingerprint({ items, writePath: args.writePath }),
         };
       }

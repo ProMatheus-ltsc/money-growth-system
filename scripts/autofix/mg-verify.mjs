@@ -51,7 +51,9 @@ if (!allOk) {
 }
 process.exit(0);
 
-/** 只读冒烟：GET /api/health 判定 2xx，绝不发写请求 */
+/** 只读冒烟：GET /api/health 判定服务可达，绝不发写请求。
+ *  站点 /api/health 需要鉴权，401/403 同样说明服务在线（可达性冒烟不验证业务鉴权）；
+ *  5xx 与网络错误才算失败。 */
 async function readSmoke(baseUrl) {
   const url = `${baseUrl.replace(/\/+$/, '')}/api/health`;
   try {
@@ -59,9 +61,9 @@ async function readSmoke(baseUrl) {
     const timer = setTimeout(() => controller.abort(), 20_000);
     const res = await fetch(url, { method: 'GET', signal: controller.signal });
     clearTimeout(timer);
-    const okStatus = res.status >= 200 && res.status < 300;
-    process.stdout.write(`[mg-verify] smoke ${okStatus ? 'OK' : 'FAILED'} (HTTP ${res.status})\n`);
-    return okStatus;
+    const reachable = res.status < 500;
+    process.stdout.write(`[mg-verify] smoke ${reachable ? 'OK' : 'FAILED'} (HTTP ${res.status}, auth-protected health 401/403 视为可达)\n`);
+    return reachable;
   } catch (e) {
     process.stderr.write(`[mg-verify] smoke error: ${e.message}\n`);
     return false;

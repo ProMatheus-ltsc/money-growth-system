@@ -18,14 +18,16 @@ export type FetchLike = (url: string, init?: Record<string, unknown>) => Promise
 }>;
 
 export class MgsApiError extends Error {
-  constructor(
-    public readonly code: string,
-    public readonly status: number,
-    message: string,
-    public readonly details?: unknown
-  ) {
+  readonly code: string;
+  readonly status: number;
+  readonly details?: unknown;
+
+  constructor(code: string, status: number, message: string, details?: unknown) {
     super(message);
     this.name = 'MgsApiError';
+    this.code = code;
+    this.status = status;
+    this.details = details;
   }
 }
 
@@ -504,6 +506,33 @@ export function recorderPayloadFromSnapshot(
       balanceCents: Number(d.balanceCents),
       repaymentCents: Number(d.repaymentCents),
     })),
+  };
+}
+
+/** 纠错补丁与钉住基线按主键合并：数组条目按业务键覆盖，未提供的键沿用基线 */
+export function mergeRecorderPayload(
+  base: RecorderPayload,
+  patch: Partial<RecorderPayload>
+): RecorderPayload {
+  const mergeBy = <T>(baseArr: T[], patchArr: T[] | undefined, key: (item: T) => string): T[] => {
+    if (!Array.isArray(patchArr)) return baseArr;
+    const byKey = new Map(baseArr.map((item) => [key(item), item]));
+    for (const item of patchArr) byKey.set(key(item), item);
+    return [...byKey.values()];
+  };
+  return {
+    treeConfigId: base.treeConfigId,
+    catConfigId: base.catConfigId,
+    assets: mergeBy(base.assets, patch.assets, (a) => String(a.nodeId)),
+    moduleGains: mergeBy(base.moduleGains ?? [], patch.moduleGains, (g) => String(g.nodeId)),
+    income: mergeBy(base.income ?? [], patch.income, (i) => String(i.catItemId)),
+    expense: mergeBy(base.expense ?? [], patch.expense, (i) => String(i.catItemId)),
+    largeItems: mergeBy(
+      base.largeItems ?? [],
+      patch.largeItems,
+      (l) => `${l.direction}:${l.catItemId}:${l.name}`
+    ),
+    debts: mergeBy(base.debts, patch.debts, (d) => String(d.debtId)),
   };
 }
 
