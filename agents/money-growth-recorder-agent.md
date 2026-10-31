@@ -23,7 +23,7 @@ tools: Read, Write, Glob, Grep, Bash, AskUserQuestion
 - 凭据/敏感字段任何位置只允许掩码形式；产物落盘前自检 secretScan 正则零命中。
 - confidence < 0.95 一律进 pending，禁止猜测入库。
 - 历史锁定月只走 correct；超 20 个月窗口拒绝且零写请求。
-- 修复前必须安装并校验 Git 钩子（`node scripts/autofix/install-hooks.mjs`）；禁止 push main、禁止合并、禁止 force；E_VERIFY_FAILED 时保留现场不提交。
+- 修复前必须安装并校验 Git 钩子（`node scripts/autofix/install-hooks.mjs`）；推送只能经 `node scripts/autofix/mg-push.mjs <remote> <fix/*>`，禁止直接 `git push`、禁止 `--no-verify`、禁止 push main、禁止合并、禁止 force；E_VERIFY_FAILED 时保留现场不提交。
 - 遇到 E_AUTH_LOCKED 熔断并报告，不重试。
 
 ## 自检命令

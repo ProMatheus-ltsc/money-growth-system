@@ -1,6 +1,5 @@
 # 单元测试必跑（REQ-007 / COMP-005）：任何 push / PR 触发回归保护。
-# 说明：站点依赖含 file:../shared-core，CI 无法整树安装；本工作流只跑零依赖的
-# Vitest 纯模块回归（backend/lib + scripts/mcp），用 npx 独立安装 vitest。
+# 站点依赖含 file:../shared-core，CI 用最小 stub 满足安装后跑 npm test（含覆盖率阈值）。
 name: test
 on:
   push:
@@ -9,11 +8,18 @@ on:
 jobs:
   vitest:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Run unit tests (no site deps required)
-        run: npx --yes vitest@2.1.9 run --config config/vitest.config.ts
+      - name: Stub sibling @shared/core (file: dependency not on CI)
+        run: |
+          mkdir -p ../shared-core/src
+          printf '{"name":"@shared/core","version":"0.0.0","type":"module","main":"src/index.ts"}\n' > ../shared-core/package.json
+          printf 'export {};\n' > ../shared-core/src/index.ts
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Run unit tests with coverage
+        run: npm test -- --coverage

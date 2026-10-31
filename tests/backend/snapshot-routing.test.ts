@@ -88,9 +88,9 @@ describe('元→分归一与纠错基线', () => {
     expect(cents.totals.netWorthCents).toBe(73456);
   });
 
-  it('不存在月份返回 {exists:false}', () => {
+  it('不存在月份返回 {exists:false}（carried/debtDefaults 兜底为空数组）', () => {
     expect(snapshotToCents(null)).toEqual({ exists: false });
-    expect(snapshotToCents({ exists: false })).toEqual({ exists: false });
+    expect(snapshotToCents({ exists: false })).toMatchObject({ exists: false, carried: [], debtDefaults: [] });
   });
 
   it('纠错基线保留钉住配置 id 且可回写为站点 body', () => {

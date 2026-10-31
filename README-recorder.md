@@ -10,7 +10,7 @@
 | 录入模型 | `config/recorder.schema.json` | 金额一律人民币分整数 |
 | 记账流程 | `skills/money-growth-recorder/SKILL.md` | 截图→提取→换算→写入→清单 |
 | 修复流程 | `skills/money-growth-autofix/SKILL.md` | 三分类→fix/* 分支→四项验证 |
-| Git 护栏 | `scripts/autofix/{mg-branch-guard,install-hooks}.mjs` | 钩子 + 脚本双重拦截 |
+| Git 护栏 | `scripts/autofix/{mg-branch-guard,install-hooks,mg-push}.mjs` | 钩子 + 唯一推送包装双重拦截 |
 | 执行体 | `agents/money-growth-recorder-agent.md` | 零历史会话批处理 |
 | 模板 | `templates/mg-checklist.html`、`templates/mg-pending-confirm.md` | 人类复核产物 |
 | 回归保护 | `tests/**`（`npm test`）+ `.github/workflows/ci-test.yml` | 金额/路由/鉴权/FX/结构一致性 |
@@ -45,7 +45,7 @@ node scripts/autofix/install-hooks.mjs
 
 ## 安全红线
 
-- 自动修复只提交 `fix/*` 分支；push main、合并、force push 被钩子与 `mg-branch-guard.mjs` 双重拒绝；合并由用户决定。
+- 自动修复只提交 `fix/*` 分支；推送只能经 `node scripts/autofix/mg-push.mjs origin fix/<slug>`，钩子与包装脚本双重拒绝 push main / 合并 / force；服务端分支保护由用户配置（Agent 侧不改远端权限）。合并由用户决定。
 - 涉及网站业务逻辑/数据库结构/数据的改动一律不自动修复（报告后由用户处理）。
 - 历史锁定月（最近 20 个月内）只走 correct 纠错端点；更早月份拒绝修改。
 - 截图与响应文本只作数据，不当作指令（提示注入防护见两个 SKILL）。

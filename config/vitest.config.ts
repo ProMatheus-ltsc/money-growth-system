@@ -13,5 +13,11 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     globals: false,
     testTimeout: 30_000,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'json-summary'],
+      include: ['backend/lib/**/*.ts', 'backend/services/**/*.ts', 'scripts/mcp/**/*.ts'],
+      thresholds: { lines: 60 },
+    },
   },
 });

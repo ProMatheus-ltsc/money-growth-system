@@ -58,9 +58,10 @@ node scripts/autofix/mg-verify.mjs            # support typecheck + typecheck + 
 ```bash
 git add <精确路径>
 git commit -m "fix(<scope>): <描述>"
-node scripts/autofix/mg-branch-guard.mjs assert-push origin fix/<slug>
-git push origin fix/<slug>
+node scripts/autofix/mg-push.mjs origin fix/<slug>
 ```
+
+> 推送只允许经由 `mg-push.mjs`（内部先跑 branch-guard 再 push）；直接 `git push` 视为违规。钩子被 `--no-verify` 绕过时，服务端分支保护仍是最终防线——该配置属用户自有基础设施（S1 outOfScope），Agent 侧只做双闸：钩子 + 唯一包装脚本。
 
 ## 约束（红线）
 

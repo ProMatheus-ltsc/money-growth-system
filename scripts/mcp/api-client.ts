@@ -399,37 +399,59 @@ export function yuanToCentsStrict(v: unknown, field: string): number {
 /** 站点快照（元）→ 录入模型（分整数），供读回比对与 mg_get_snapshot 输出 */
 export function snapshotToCents(raw: Record<string, unknown> | null): Record<string, unknown> {
   if (!raw) return { exists: false };
-  if (raw.exists === false) return { ...raw, exists: false };
+  if (raw.exists === false) {
+    const asObj = (v: unknown): Record<string, unknown>[] =>
+      Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
+    return {
+      ...raw,
+      exists: false,
+      carried: asObj(raw.carried).map((c) => {
+        const { balance, ...rest } = c;
+        return { ...rest, balanceCents: yuanToCentsStrict(balance, 'carried.balance') };
+      }),
+      debtDefaults: asObj(raw.debtDefaults).map((d) => {
+        const { monthlyPayment, lastBalance, ...rest } = d;
+        return {
+          ...rest,
+          monthlyPaymentCents: yuanToCentsStrict(monthlyPayment, 'debtDefaults.monthlyPayment'),
+          lastBalanceCents: yuanToCentsStrict(lastBalance, 'debtDefaults.lastBalance'),
+        };
+      }),
+    };
+  }
   const asObj = (v: unknown): Record<string, unknown>[] =>
     Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
   const totals = (raw.totals ?? {}) as Record<string, unknown>;
   return {
     ...raw,
-    assets: asObj(raw.assets).map((a) => ({
-      ...a,
-      balanceCents: yuanToCentsStrict(a.balance, 'assets.balance'),
-    })),
-    moduleGains: asObj(raw.moduleGains).map((g) => ({
-      nodeId: g.nodeId,
-      gainCents: g.gain === null || g.gain === undefined ? null : yuanToCentsStrict(g.gain, 'moduleGains.gain'),
-    })),
-    income: asObj(raw.income).map((i) => ({
-      catItemId: i.catItemId,
-      amountCents: yuanToCentsStrict(i.amount, 'income.amount'),
-    })),
-    expense: asObj(raw.expense).map((i) => ({
-      catItemId: i.catItemId,
-      amountCents: yuanToCentsStrict(i.amount, 'expense.amount'),
-    })),
-    largeItems: asObj(raw.largeItems).map((l) => ({
-      ...l,
-      amountCents: yuanToCentsStrict(l.amount, 'largeItems.amount'),
-    })),
-    debts: asObj(raw.debts).map((d) => ({
-      ...d,
-      balanceCents: yuanToCentsStrict(d.balance, 'debts.balance'),
-      repaymentCents: yuanToCentsStrict(d.repayment, 'debts.repayment'),
-    })),
+    assets: asObj(raw.assets).map((a) => {
+      const { balance, ...rest } = a;
+      return { ...rest, balanceCents: yuanToCentsStrict(balance, 'assets.balance') };
+    }),
+    moduleGains: asObj(raw.moduleGains).map((g) => {
+      const { gain, ...rest } = g;
+      return { ...rest, gainCents: gain === null || gain === undefined ? null : yuanToCentsStrict(gain, 'moduleGains.gain') };
+    }),
+    income: asObj(raw.income).map((i) => {
+      const { amount, ...rest } = i;
+      return { ...rest, amountCents: yuanToCentsStrict(amount, 'income.amount') };
+    }),
+    expense: asObj(raw.expense).map((i) => {
+      const { amount, ...rest } = i;
+      return { ...rest, amountCents: yuanToCentsStrict(amount, 'expense.amount') };
+    }),
+    largeItems: asObj(raw.largeItems).map((l) => {
+      const { amount, ...rest } = l;
+      return { ...rest, amountCents: yuanToCentsStrict(amount, 'largeItems.amount') };
+    }),
+    debts: asObj(raw.debts).map((d) => {
+      const { balance, repayment, ...rest } = d;
+      return {
+        ...rest,
+        balanceCents: yuanToCentsStrict(balance, 'debts.balance'),
+        repaymentCents: yuanToCentsStrict(repayment, 'debts.repayment'),
+      };
+    }),
     totals: {
       totalAssetsCents: yuanToCentsStrict(totals.totalAssets, 'totals.totalAssets'),
       totalDebtCents: yuanToCentsStrict(totals.totalDebt, 'totals.totalDebt'),
