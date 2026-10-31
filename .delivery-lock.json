@@ -1,0 +1,21 @@
+{
+  "projectId": "PRJ-2026-012",
+  "stage": "S6",
+  "allowedFiles": [
+    "skills/",
+    "agents/",
+    "templates/",
+    "scripts/",
+    "config/",
+    "schemas/",
+    "tests/",
+    ".claude/",
+    ".claude-plugin/",
+    ".qoder-plugin/",
+    ".qoder/skills/",
+    ".qoder/agents/",
+    "README.md"
+  ],
+  "targetRepo": "/Users/liyunfei/IdeaProjects/money-growth-system",
+  "baseBranch": "main"
+}
