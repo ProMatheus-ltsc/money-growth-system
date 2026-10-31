@@ -183,8 +183,25 @@ export class MoneyGrowthServer {
           return { corrected: false, zeroWrite: true, reason: 'E_SCHEMA: 目标月无快照，无需纠错，请走保存' };
         }
         const pinned = recorderPayloadFromSnapshot(snap);
-        const patch = (args.patch ?? {}) as Partial<RecorderPayload>;
-        const merged = mergeRecorderPayload(pinned, patch);
+        const patch = args.patch as Record<string, unknown> | undefined;
+        const PATCH_KEYS = ['assets', 'moduleGains', 'income', 'expense', 'largeItems', 'debts'];
+        if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
+          throw new MgsApiError('E_SCHEMA', 0, 'patch 必须为对象');
+        }
+        const unknownKeys = Object.keys(patch).filter((k) => !PATCH_KEYS.includes(k));
+        if (unknownKeys.length > 0) {
+          throw new MgsApiError('E_SCHEMA', 0, `patch 含不支持的字段：${unknownKeys.join(', ')}`);
+        }
+        const present = PATCH_KEYS.filter((k) => (patch as Record<string, unknown>)[k] !== undefined);
+        if (present.length === 0) {
+          throw new MgsApiError('E_SCHEMA', 0, 'patch 至少需要包含一个明细数组（assets/moduleGains/income/expense/largeItems/debts）');
+        }
+        for (const key of present) {
+          if (!Array.isArray((patch as Record<string, unknown>)[key])) {
+            throw new MgsApiError('E_SCHEMA', 0, `patch.${key} 必须为数组`);
+          }
+        }
+        const merged = mergeRecorderPayload(pinned, patch as Partial<RecorderPayload>);
         this.assertPayload(merged, month);
         const result = await this.mgs().correctSnapshot(month, buildSiteBody(merged));
         const record = { corrected: true, writePath: 'correct', idempotentHit: false, correctedAt: result.correctedAt, readbackDiff: result.diff };

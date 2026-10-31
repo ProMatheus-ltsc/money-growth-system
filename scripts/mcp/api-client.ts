@@ -515,7 +515,10 @@ export function mergeRecorderPayload(
   patch: Partial<RecorderPayload>
 ): RecorderPayload {
   const mergeBy = <T>(baseArr: T[], patchArr: T[] | undefined, key: (item: T) => string): T[] => {
-    if (!Array.isArray(patchArr)) return baseArr;
+    if (patchArr === undefined) return baseArr;
+    if (!Array.isArray(patchArr)) {
+      throw new MgsApiError('E_SCHEMA', 0, '纠错补丁中的明细字段必须为数组');
+    }
     const byKey = new Map(baseArr.map((item) => [key(item), item]));
     for (const item of patchArr) byKey.set(key(item), item);
     return [...byKey.values()];

@@ -164,3 +164,10 @@ describe('mergeRecorderPayload（纠错补丁按业务键合并）', () => {
     expect(merged.largeItems![0].amountCents).toBe(200);
   });
 });
+
+describe('mergeRecorderPayload 非法补丁防呆', () => {
+  it('明细字段非数组时抛 E_SCHEMA，不再静默 no-op', () => {
+    const base = { treeConfigId: 1, catConfigId: 1, assets: [], debts: [] };
+    expect(() => mergeRecorderPayload(base, { assets: { nodeId: 1 } } as any)).toThrow('必须为数组');
+  });
+});

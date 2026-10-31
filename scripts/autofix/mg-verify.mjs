@@ -10,6 +10,7 @@
  * 退出码：0 全绿；1 任一验证失败（E_VERIFY_FAILED）；2 用法/环境错误。
  */
 import { spawnSync } from 'node:child_process';
+import { smokeStatusOk } from './smoke-policy.mjs';
 
 const args = new Set(process.argv.slice(2));
 const results = [];
@@ -61,8 +62,8 @@ async function readSmoke(baseUrl) {
     const timer = setTimeout(() => controller.abort(), 20_000);
     const res = await fetch(url, { method: 'GET', signal: controller.signal });
     clearTimeout(timer);
-    const reachable = res.status < 500;
-    process.stdout.write(`[mg-verify] smoke ${reachable ? 'OK' : 'FAILED'} (HTTP ${res.status}, auth-protected health 401/403 视为可达)\n`);
+    const reachable = smokeStatusOk(res.status);
+    process.stdout.write(`[mg-verify] smoke ${reachable ? 'OK' : 'FAILED'} (HTTP ${res.status}, 仅 2xx/401/403 视为可达)\n`);
     return reachable;
   } catch (e) {
     process.stderr.write(`[mg-verify] smoke error: ${e.message}\n`);

@@ -10,8 +10,19 @@
     "esModuleInterop": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "lib": ["ES2022", "DOM"],
-    "types": ["node", "@cloudflare/workers-types"]
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
+    "types": [
+      "node",
+      "@cloudflare/workers-types"
+    ],
+    "allowJs": true
   },
-  "include": ["../scripts/**/*.ts", "../backend/lib/*.ts", "../tests/**/*.ts"]
+  "include": [
+    "../scripts/**/*.ts",
+    "../backend/lib/*.ts",
+    "../tests/**/*.ts"
+  ]
 }
