@@ -15,6 +15,32 @@ jobs:
     steps:
       - name: Checkout 项目仓库
         uses: actions/checkout@v4
+        with:
+          # 需要 git diff 判断 migrations 是否变化，故取完整历史
+          fetch-depth: 2
+
+      # 仅在 migrations/ 有变更时才跑 D1 迁移。
+      # 背景（2026-11-12）：原实现每次 push 都无条件 apply，纯前端/文档改动也会
+      # 消耗 D1 免费版的每日行读取配额；配额耗尽会让本 job 失败并连带
+      # 「创建 Pages 项目 / 部署 Pages」被跳过——即代码明明构建通过却无法上线。
+      - name: 检测 migrations 是否变更
+        id: migrations
+        run: |
+          set -euo pipefail
+          BEFORE='${{ github.event.before }}'
+          ZERO='0000000000000000000000000000000000000000'
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "$ZERO" ]; then
+            echo "首次推送或无 before 提交，视为需要迁移"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BEFORE" "${{ github.sha }}" -- migrations | grep -q .; then
+            echo "migrations 有变更"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "migrations 无变更，跳过 D1 迁移"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+          # 兜底：首次部署（迁移表可能还不存在）时也必须跑
+          echo "force=${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}" >> "$GITHUB_OUTPUT"
 
       # file: 依赖模式（04 §12）：shared-core 须存在于项目父目录
       - name: Clone shared-core 到父目录
@@ -44,11 +70,31 @@ jobs:
       - name: 生产构建
         run: npm run build
 
+      # 迁移失败不应阻断「纯代码上线」：若仅因免费额度耗尽（code 7500），
+      # 记一条警告并继续部署；迁移会在次日额度恢复后的下一次 push 补上。
+      # 其它错误（语法、约束等）仍然硬失败，避免掩盖真实迁移问题。
       - name: D1 线上迁移
+        if: steps.migrations.outputs.changed == 'true' || steps.migrations.outputs.force == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler d1 migrations apply fam-asset-db --remote
+        run: |
+          set +e
+          npx wrangler d1 migrations apply fam-asset-db --remote 2>&1 | tee /tmp/d1-migrate.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -eq 0 ]; then
+            exit 0
+          fi
+          if grep -q 'code: 7500' /tmp/d1-migrate.log; then
+            echo "::warning::D1 今日免费行读取配额已耗尽（code 7500），跳过迁移继续部署；额度恢复后会补跑"
+            exit 0
+          fi
+          echo "::error::D1 迁移失败（非配额原因），请检查 migrations"
+          exit "$status"
+
+      - name: 跳过 D1 迁移（migrations 无变更）
+        if: steps.migrations.outputs.changed != 'true' && steps.migrations.outputs.force != 'true'
+        run: echo "migrations/ 本次无变更，跳过 D1 迁移以节省免费额度"
 
       # wrangler 4 起 pages deploy 不再自动创建项目，首次须先 project create（已存在则跳过）
       - name: 创建 Pages 项目（首次）
