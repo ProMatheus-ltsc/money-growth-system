@@ -78,6 +78,11 @@ function validPayload(): BackupPayload {
     ],
     reportSnapshots: [],
     aiAnalyses: [],
+    // v2 起必含的四组扩展数据（校验器会拒绝缺失，视为文件被截断）
+    depreciations: [],
+    revaluations: [],
+    contingentLiabilities: [],
+    healthConfig: [],
   };
 }
 
@@ -144,5 +149,75 @@ describe('restoreFromPayload', () => {
     expect(res.restored).toBe(true);
     expect(res.counts.treeConfigs).toBe(1);
     expect(res.counts.snapshots).toBe(1);
+  });
+
+  // P0-1 回归：asset_depreciation / asset_revaluations 外键引用 tree_nodes，
+  // 必须在 DELETE FROM tree_nodes 之前清空，否则 D1 强制外键会让整批回滚。
+  it('扩展表清理早于 tree_nodes（外键顺序）', async () => {
+    const db = mockDb(handler);
+    await restoreFromPayload(db, validPayload());
+    const sqls = ((db as unknown as { __calls: { sql: string }[] }).__calls ?? []).map((c) => c.sql);
+    const idx = (fragment: string) => sqls.findIndex((s) => s.includes(fragment));
+    const treeNodesAt = idx('DELETE FROM tree_nodes');
+    expect(treeNodesAt).toBeGreaterThan(-1);
+    expect(idx('DELETE FROM asset_revaluations')).toBeGreaterThan(-1);
+    expect(idx('DELETE FROM asset_revaluations')).toBeLessThan(treeNodesAt);
+    expect(idx('DELETE FROM asset_depreciation')).toBeLessThan(treeNodesAt);
+    expect(idx('DELETE FROM tree_configs')).toBeGreaterThan(treeNodesAt);
+  });
+
+  // P0-2 回归：节点必须带 assetCategory / liquidity，否则恢复后实物资产退化为 financial/medium
+  it('恢复节点时写入 asset_category 与 liquidity', async () => {
+    const db = mockDb(handler);
+    const p = validPayload();
+    p.treeConfigs[0].nodes[1].assetCategory = 'physical';
+    p.treeConfigs[0].nodes[1].liquidity = 'low';
+    await restoreFromPayload(db, p);
+    // mockD1 先记录 prepare（args 为空），再记录每次 bind；取最后一条带参数的 tree_nodes 插入
+    const calls = ((db as unknown as { __calls: { sql: string; args: unknown[] }[] }).__calls ?? []).filter(
+      (c) => c.sql.includes('INSERT INTO tree_nodes') && c.args.length > 0
+    );
+    expect(calls.length).toBeGreaterThan(0);
+    const insert = calls[calls.length - 1];
+    expect(insert.sql).toContain('asset_category');
+    expect(insert.sql).toContain('liquidity');
+    expect(insert.args).toContain('physical');
+    expect(insert.args).toContain('low');
+  });
+
+  it('v1 历史备份可恢复，并给出折旧丢失告警', async () => {
+    const db = mockDb((sql, args) => {
+      if (sql.includes('COUNT(*) AS c FROM asset_depreciation')) return { c: 3 };
+      if (sql.includes('COUNT(*) AS c FROM asset_revaluations')) return { c: 2 };
+      return handler(sql, args);
+    });
+    const v1 = validPayload();
+    v1.schemaVersion = 1;
+    for (const k of ['depreciations', 'revaluations', 'contingentLiabilities', 'healthConfig'] as const) {
+      delete (v1 as Record<string, unknown>)[k];
+    }
+    for (const n of v1.treeConfigs[0].nodes) {
+      delete n.assetCategory;
+      delete n.liquidity;
+    }
+    expect(validateBackupPayload(v1)).toEqual([]);
+    const res = await restoreFromPayload(db, v1);
+    expect(res.schemaVersion).toBe(1);
+    expect(res.warnings.some((w) => w.includes('折旧'))).toBe(true);
+    // v1 不含这两张表 → 保留原值，不做 DELETE
+    expect(ranSql(db, 'DELETE FROM contingent_liabilities')).toBe(false);
+    expect(ranSql(db, 'DELETE FROM health_config')).toBe(false);
+  });
+
+  it('v2 备份恢复覆盖扩展表（先删后建）', async () => {
+    const db = mockDb(handler);
+    const p = validPayload();
+    delete p.depreciations;
+    delete p.revaluations;
+    delete p.contingentLiabilities;
+    delete p.healthConfig;
+    const res = await restoreFromPayload(db, p);
+    expect(res.counts.depreciations).toBe(0);
+    expect(res.counts.revaluations).toBe(0);
   });
 });

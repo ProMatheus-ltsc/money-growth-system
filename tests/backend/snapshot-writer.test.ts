@@ -169,4 +169,50 @@ describe('writeSnapshot', () => {
     expect(asObject(null)).toBeNull();
     expect(asObject([1])).toBeNull();
   });
+
+  // P1 回归：负债主档只由「最新月」推进，历史纠错不得回写主档余额
+  describe('负债主档同步边界', () => {
+    it('写入月份 = 现存最大月 → 同步主档', async () => {
+      const db = mockDb((sql, args) =>
+        sql.includes('SELECT MAX(month) AS m FROM monthly_snapshots') ? { m: '2026-10' } : handler(sql, args)
+      );
+      const { out } = await validate();
+      const res = await writeSnapshot(db, '2026-10', out!);
+      expect(res.debtMasterSynced).toBe(true);
+      expect(ranSql(db, 'UPDATE debts SET balance_cents')).toBe(true);
+    });
+
+    it('无任何快照（首月）→ 视为最新，同步主档', async () => {
+      const db = mockDb(handler);
+      const { out } = await validate();
+      const res = await writeSnapshot(db, '2026-10', out!);
+      expect(res.debtMasterSynced).toBe(true);
+      expect(ranSql(db, 'UPDATE debts SET balance_cents')).toBe(true);
+    });
+
+    it('写入历史月（更早）→ 不同步主档，避免纠错污染负债页默认值', async () => {
+      const db = mockDb((sql, args) =>
+        sql.includes('SELECT MAX(month) AS m FROM monthly_snapshots') ? { m: '2026-11' } : handler(sql, args)
+      );
+      const { out } = await validate();
+      const res = await writeSnapshot(db, '2026-09', out!);
+      expect(res.debtMasterSynced).toBe(false);
+      expect(ranSql(db, 'UPDATE debts SET balance_cents')).toBe(false);
+      // 快照明细照常写入，只是不回写主档
+      expect(ranSql(db, 'INSERT INTO snapshot_debts')).toBe(true);
+    });
+
+    it('覆盖路径（已有快照）同样遵守主档同步边界', async () => {
+      const db = mockDb((sql, args) => {
+        if (sql.includes('SELECT MAX(month) AS m FROM monthly_snapshots')) return { m: '2026-11' };
+        if (sql.includes('FROM monthly_snapshots WHERE month')) return { id: 7 };
+        return handler(sql, args);
+      });
+      const { out } = await validate();
+      const res = await writeSnapshot(db, '2026-09', out!);
+      expect(res.debtMasterSynced).toBe(false);
+      expect(ranSql(db, 'UPDATE debts SET balance_cents')).toBe(false);
+      expect(ranSql(db, 'UPDATE monthly_snapshots SET')).toBe(true);
+    });
+  });
 });
