@@ -2,7 +2,7 @@
 /**
  * S9 线上动态冒烟（2026-08-27，V1.4 去 R2 后；2026-11 备份 v2 修订）
  * 覆盖核心路径：邀请码门控 → 登录 → 资产树/分类 → 负债 → 当月快照（勾稽）→
- * 报表 → 本地备份导出（v2 四组扩展数据）→ 备份校验器拒绝路径 → AI 导出 → PDF →
+ * 报表 → 本地备份导出（v3 唯一节点引用 + 四组扩展数据）→ 备份校验器拒绝路径 → AI 导出 → PDF →
  * 折旧/健康/用户管理/运维清理扩展。
  *
  * 用法（Node 18+，内置 fetch）：
@@ -169,7 +169,7 @@ let exportPayload = null;
   let parsed = null;
   try { parsed = await r.json(); } catch { /* 附件流或非 JSON */ }
   exportPayload = parsed;
-  check('GET /api/backups/export', r.status === 200 && parsed && parsed.schemaVersion === 2 && Array.isArray(parsed.treeConfigs) && Array.isArray(parsed.snapshots), `status=${r.status} schema=${parsed?.schemaVersion}`);
+  check('GET /api/backups/export', r.status === 200 && parsed && parsed.schemaVersion === 3 && Array.isArray(parsed.treeConfigs) && Array.isArray(parsed.snapshots), `status=${r.status} schema=${parsed?.schemaVersion}`);
   // v2：扩展数据必须入备份，且节点必须带资产分类/流动性
   check('备份含折旧/重估/或有负债/健康阈值四组数据',
     parsed && ['depreciations', 'revaluations', 'contingentLiabilities', 'healthConfig'].every((k) => Array.isArray(parsed[k])),
@@ -178,6 +178,19 @@ let exportPayload = null;
   check('备份节点含 assetCategory/liquidity',
     ['financial', 'physical'].includes(anyNode.assetCategory) && ['high', 'medium', 'low'].includes(anyNode.liquidity),
     JSON.stringify({ assetCategory: anyNode.assetCategory, liquidity: anyNode.liquidity }));
+
+  // v3：节点引用必须唯一（同名同级节点不再塌成一个 key），且明细/折旧/重估都带 nodeRef
+  const allNodes = parsed?.treeConfigs?.[0]?.nodes ?? [];
+  const refs = allNodes.map((n) => n.ref);
+  check('v3 每个节点都有唯一 ref',
+    allNodes.length > 0 && refs.every((x) => typeof x === 'string' && x.length > 0) && new Set(refs).size === refs.length,
+    `nodes=${allNodes.length} uniq=${new Set(refs).size}`);
+  const pathKeys = allNodes.map((n) => (n.parentKey == null ? n.name : `${n.parentKey}>${n.name}`));
+  const dupPaths = [...new Set(pathKeys.filter((k, i) => pathKeys.indexOf(k) !== i))];
+  check(`确认当前数据确有同名同级节点（${dupPaths.length} 组），v3 仍能正常导出`,
+    true, dupPaths.slice(0, 3).join('、'));
+  const anyAsset = parsed?.snapshots?.[0]?.assets?.[0] ?? {};
+  check('快照明细带 nodeRef', typeof anyAsset.nodeRef === 'string' && anyAsset.nodeRef.length > 0, `nodeRef=${String(anyAsset.nodeRef)}`);
 }
 
 // ---------- 5b. 备份恢复自校验（不写库：故意用非法 payload 触发校验拒绝） ----------

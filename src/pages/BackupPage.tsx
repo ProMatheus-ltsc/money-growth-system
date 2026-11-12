@@ -13,8 +13,8 @@ import { Download, HardDrive, RefreshCw, AlertTriangle } from 'lucide-react';
 import { api, apiBlob, ApiError } from '../lib/api';
 import type { BackupCounts, BackupImportResult } from '../lib/types';
 
-/** 支持恢复的备份格式版本（v1 为历史文件，服务端降级处理并返回告警） */
-const SUPPORTED_SCHEMA_VERSIONS = [1, 2];
+/** 支持恢复的备份格式版本（v1/v2 为历史文件，服务端降级处理并返回告警；v3 起使用唯一节点引用） */
+const SUPPORTED_SCHEMA_VERSIONS = [1, 2, 3];
 
 export default function BackupPage() {
   const { showToast } = useToast();
@@ -70,13 +70,28 @@ export default function BackupPage() {
         showToast('文件预检未通过，现有数据未变更', 'error', 6000);
         return;
       }
-      const legacy = schemaVersion === 1;
+      const legacy = schemaVersion <= 2;
       const snaps = (payload.snapshots as { month?: string }[]).length;
       const trees = (payload.treeConfigs as unknown[]).length;
+      // v3 起节点引用为唯一 ref：旧格式遇到同名同级节点会被服务端拒绝恢复
+      const treeNodes = ((payload.treeConfigs as { nodes?: { name?: string; parentKey?: string | null; ref?: string }[] }[])[0]?.nodes) ?? [];
+      const hasRef = treeNodes.length > 0 && treeNodes.every((n) => typeof n.ref === 'string' && n.ref.length > 0);
+      const pathKeys = treeNodes.map((n) => (n.parentKey === null || n.parentKey === undefined ? String(n.name) : `${n.parentKey}>${n.name}`));
+      const dupPaths = [...new Set(pathKeys.filter((k, i) => pathKeys.indexOf(k) !== i))];
+      if (!hasRef && dupPaths.length > 0) {
+        setImportErrors([
+          `该文件为 v${schemaVersion} 旧格式，且存在同路径重名节点（${dupPaths.slice(0, 3).join('、')}${dupPaths.length > 3 ? ' 等' : ''}），无法无歧义恢复。`,
+          '请先在当前系统重新「下载全量备份」（v3 起使用唯一节点引用）再恢复。',
+        ]);
+        showToast('文件含重名节点且为旧格式，已拒绝（现有数据未变更）', 'error', 8000);
+        return;
+      }
       const extra = legacy
-        ? '该文件为 v1 旧格式：不含折旧/重估/或有负债/健康阈值，恢复后折旧与重估将被清空（需重新录入），或有负债与健康阈值保持现状。'
+        ? schemaVersion === 1
+          ? '该文件为 v1 旧格式：不含折旧/重估/或有负债/健康阈值，恢复后折旧与重估将被清空（需重新录入），或有负债与健康阈值保持现状。'
+          : '该文件为 v2 旧格式：包含全部扩展数据，但节点引用为名称路径；若资产树存在同名同级节点将无法恢复。'
         : `含折旧 ${(payload.depreciations as unknown[]).length} 条、重估 ${(payload.revaluations as unknown[]).length} 条、或有负债 ${(payload.contingentLiabilities as unknown[]).length} 条、健康阈值 ${(payload.healthConfig as unknown[]).length} 项。`;
-      const summary = `含 ${trees} 个资产树配置版本、${(payload.catConfigs as unknown[]).length} 个分类配置版本、${(payload.debts as unknown[]).length} 项负债、${snaps} 个月度快照。${extra} 恢复将全量覆盖现有业务数据（账号不受影响）。建议恢复前先下载一份当前数据留档。`;
+      const summary = `含 ${trees} 个资产树配置版本、${(payload.catConfigs as unknown[]).length} 个分类配置版本、${(payload.debts as unknown[]).length} 项负债、${snaps} 个月度快照。${extra} 恢复将全量覆盖现有业务数据（账号不受影响），且为单事务原子提交：中途失败会整体回滚、不留半恢复状态。建议恢复前先下载一份当前数据留档。`;
       setConfirmImport({ payload, summary, legacy });
     } catch {
       setImportErrors(['文件不是合法 JSON，已拒绝（现有数据未变更）。']);

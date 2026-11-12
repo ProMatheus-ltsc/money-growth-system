@@ -1,6 +1,6 @@
 /**
  * 备份核心（05 §3.26~§3.27，F-07，V1.4 移除 R2 后仅本地备份）：
- * - 导出结构（§3.26）：节点引用采用「名称路径」而非数据库 id，保证跨实例可恢复；
+ * - 导出结构（§3.26）：节点引用采用「配置内唯一引用」而非数据库 id，保证跨实例可恢复；
  *   不含账号与身份信息（users/sessions 不导出）。
  * - 本地下载（§3.26）与本地恢复（§3.27）同一结构同一校验器；云端备份（R2）已下线（04 §7.1）。
  * - 恢复：先校验后写入；非法拒绝且不改变任何现有数据（PRD §4 数据完整性）。
@@ -8,10 +8,17 @@
  * 格式版本：
  * - v1：仅 treeConfigs/catConfigs/debts/snapshots/reportSnapshots/aiAnalyses；
  *   节点缺 assetCategory/liquidity，且不含折旧/重估/或有负债/健康配置。
- * - v2（当前）：节点补齐 assetCategory/liquidity；新增 depreciations/revaluations/
- *   contingentLiabilities/healthConfig 四组数据；恢复为「全量覆盖」。
- * - v1 文件仍可恢复：缺失字段回退默认值，折旧/重估因外键必须先清空（结果里给出告警），
- *   或有负债/健康配置不受影响（这两张表不引用资产树，保留原值）。
+ * - v2：节点补齐 assetCategory/liquidity；新增 depreciations/revaluations/
+ *   contingentLiabilities/healthConfig 四组数据。
+ * - v3（当前）：**节点引用改为显式唯一 `ref`**。v1/v2 用「名称路径」（`A>B>C`）定位节点，
+ *   同一父节点下存在重名节点（真实数据里就有：两个「小李纳指100」）时路径相同的两个节点
+ *   会塌成一个 key，恢复时后写覆盖前写 → 同一 snapshot 内相同 node_id →
+ *   撞 `UNIQUE(snapshot_id, node_id)` 恢复中途失败。v3 给每个节点分配配置内唯一的 `ref`，
+ *   任何重名都不再产生歧义。
+ *
+ * 恢复的原子性：全流程预分配显式主键（不依赖 last_row_id），把所有语句压进 **单个 D1 batch**。
+ * D1 batch 即单事务，任一语句失败整批回滚，从而彻底消除「配置已重建、明细为空」的半恢复状态。
+ * 历史实现因需读取 last_row_id 做顺序映射，只能拆成多次 await（非原子）。
  */
 import type { Env } from '../env';
 import type { ErrorDetail } from '../lib/errors';
@@ -20,12 +27,21 @@ import { catKeyPath, getCatItems, getTreeNodes, loadBundle } from './snapshotRep
 import { nodeKeyPath } from './treeUtil';
 
 /** 当前导出格式版本 */
-export const BACKUP_SCHEMA_VERSION = 2;
-/** 恢复可接受的版本（v1 为历史文件，恢复时降级处理并给出告警） */
-export const SUPPORTED_BACKUP_SCHEMA_VERSIONS: readonly number[] = [1, 2];
+export const BACKUP_SCHEMA_VERSION = 3;
+/** 恢复可接受的版本（v1/v2 为历史文件，恢复时降级处理并给出告警） */
+export const SUPPORTED_BACKUP_SCHEMA_VERSIONS: readonly number[] = [1, 2, 3];
+
+/**
+ * 单次恢复允许的最大语句数（防御性上限）。
+ * 超过则在**删除任何数据之前**拒绝，保证永远不会出现半恢复；正常数据量（4 个月快照）约 50 条。
+ */
+const MAX_RESTORE_STATEMENTS = 800;
 
 const ASSET_CATEGORIES = ['financial', 'physical'] as const;
 const LIQUIDITIES = ['high', 'medium', 'low'] as const;
+
+/** D1 每条查询最多 100 个绑定参数（Cloudflare 官方限制） */
+const MAX_BIND_VARS = 100;
 
 /** 健康配置缺省值（迁移 0007 的种子；v1 备份恢复时用于回填） */
 const HEALTH_CONFIG_DEFAULTS: { key: string; value: string }[] = [
@@ -37,7 +53,11 @@ const HEALTH_CONFIG_DEFAULTS: { key: string; value: string }[] = [
 ];
 
 export interface BackupTreePayloadNode {
+  /** v3：配置内唯一引用（如 n1/n2…）。v3 起所有节点引用都用它，不再依赖名称路径 */
+  ref?: string;
   name: string;
+  /** v3：父节点引用（roots 为 null），与 parentKey 并存以便人工阅读 */
+  parentRef?: string | null;
   parentKey: string | null;
   nodeType: string;
   targetRateAnnual: number | null;
@@ -80,8 +100,9 @@ export interface BackupPayload {
     month: string;
     treeConfigVersion: number;
     catConfigVersion: number;
-    assets: { nodeKey: string; balance: number; hasNewFunds: boolean; updateSource: string }[];
-    moduleGains: { module: string; gain: number | null }[];
+    /** v3：nodeRef 为准；nodeKey 仅保留可读性（v1/v2 文件只有 nodeKey） */
+    assets: { nodeRef?: string; nodeKey?: string; balance: number; hasNewFunds: boolean; updateSource: string }[];
+    moduleGains: { nodeRef?: string; module?: string; gain: number | null }[];
     income: { cat: string; amount: number }[];
     expense: { cat: string; amount: number }[];
     largeItems: { direction: string; cat: string; name: string; amount: number }[];
@@ -96,10 +117,11 @@ export interface BackupPayload {
     payload: unknown;
   }[];
   aiAnalyses: { analysisDate: string; assetMonth: string; payload: unknown }[];
-  /** v2：实物资产折旧参数（按配置版本 + 节点名称路径定位） */
+  /** v2 起：实物资产折旧参数（v3 用 treeConfigVersion + nodeRef 定位） */
   depreciations?: {
     treeConfigVersion: number;
-    nodeKey: string;
+    nodeRef?: string;
+    nodeKey?: string;
     depreciationCategory: string;
     originalValue: number;
     purchaseDate: string;
@@ -108,10 +130,11 @@ export interface BackupPayload {
     salvageMode: string;
     marketSalvageValue: number | null;
   }[];
-  /** v2：公允价值重估记录（按配置版本 + 节点名称路径定位；created_by 不导出） */
+  /** v2 起：公允价值重估记录（v3 用 treeConfigVersion + nodeRef 定位；created_by 不导出） */
   revaluations?: {
     treeConfigVersion: number;
-    nodeKey: string;
+    nodeRef?: string;
+    nodeKey?: string;
     revaluationDate: string;
     previousValue: number;
     newValue: number;
@@ -120,7 +143,7 @@ export interface BackupPayload {
     reason: string | null;
     appraiser: string | null;
   }[];
-  /** v2：或有负债（不计入负债总额，仅报表附注披露；created_by 不导出） */
+  /** v2 起：或有负债（不计入负债总额，仅报表附注披露；created_by 不导出） */
   contingentLiabilities?: {
     name: string;
     liabilityType: string;
@@ -132,21 +155,29 @@ export interface BackupPayload {
     description: string | null;
     status: string;
   }[];
-  /** v2：财务健康阈值配置（key/value 字符串表） */
+  /** v2 起：财务健康阈值配置（key/value 字符串表） */
   healthConfig?: { key: string; value: string }[];
 }
 
+/** 节点名称路径（v1/v2 语义）：父路径 + 名称 */
+function keyOfNode(n: { parentKey?: string | null; name: string }): string {
+  return n.parentKey === null || n.parentKey === undefined ? n.name : `${n.parentKey}>${n.name}`;
+}
+
 /**
- * 全库 → §3.26 导出结构（名称路径）。
- * v2 起覆盖 0003~0007 四张扩展表；新增表时必须同步 restoreFromPayload 的清理与重放。
+ * 全库 → 导出结构。
+ * v3 起为每个节点分配配置内唯一 ref，并以 ref 作为快照/折旧/重估的节点引用。
  */
 export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> {
   const now = new Date().toISOString();
   const treeConfigs: BackupPayload['treeConfigs'] = [];
   /** config.id → version */
   const configVersionById = new Map<number, number>();
-  /** config.id → 该版本节点集（用于名称路径解析） */
+  /** config.id → 该版本节点集 */
   const nodesByConfigId = new Map<number, Awaited<ReturnType<typeof getTreeNodes>>>();
+  /** config version → (nodeId → ref) */
+  const refByVersion = new Map<number, Map<number, string>>();
+
   const { results: cfgs } = await db.prepare('SELECT * FROM tree_configs ORDER BY version ASC').all<{
     id: number; version: number; effective_from_month: string; note: string | null;
   }>();
@@ -154,7 +185,7 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
     const nodes = await getTreeNodes(db, cfg.id);
     configVersionById.set(cfg.id, cfg.version);
     nodesByConfigId.set(cfg.id, nodes);
-    // 拓扑排序（父先于子），保证备份文件内名称路径链前向可解析
+    // 拓扑排序（父先于子），保证备份文件内父子链前向可解析
     const byParent = new Map<number | null, typeof nodes>();
     for (const n of nodes) {
       const arr = byParent.get(n.parent_id) ?? [];
@@ -169,12 +200,18 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
       }
     };
     walk(null);
+    // 同一 config 内 ref 唯一；父先于子，索引稳定
+    const refById = new Map<number, string>();
+    ordered.forEach((n, i) => refById.set(n.id, `n${i + 1}`));
+    refByVersion.set(cfg.version, refById);
     treeConfigs.push({
       version: cfg.version,
       effectiveFromMonth: cfg.effective_from_month,
       note: cfg.note,
       nodes: ordered.map((n) => ({
+        ref: refById.get(n.id),
         name: n.name,
+        parentRef: n.parent_id === null ? null : refById.get(n.parent_id) ?? null,
         parentKey: n.parent_id === null ? null : nodeKeyPath(nodes, n.parent_id),
         nodeType: n.node_type,
         targetRateAnnual: n.target_rate_annual,
@@ -234,20 +271,25 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
   for (const s of snaps) {
     const b = await loadBundle(db, s.month);
     if (!b) continue;
+    const ref = refByVersion.get(b.treeConfig.version);
+    const nodeRef = (nodeId: number) => ref?.get(nodeId);
     const nodeName = (nodeId: number) => nodeKeyPath(b.treeNodes, nodeId);
     snapshots.push({
       month: s.month,
       treeConfigVersion: b.treeConfig.version,
       catConfigVersion: b.catConfig.version,
       assets: b.assets.map((a) => ({
+        nodeRef: nodeRef(a.node_id),
         nodeKey: nodeName(a.node_id),
         balance: a.balance_cents / 100,
         hasNewFunds: a.has_new_funds === 1,
         updateSource: a.update_source,
       })),
-      // CR-005：moduleGains 按「节点全路径名称」导出（与 assets.nodeKey 同构，恢复侧可直接命中；
-      // 原导出叶子名、恢复按全路径匹配 → 必 miss → node_id=0 脏行。05 §3.9 契约语义修订待用户拍板）
-      moduleGains: b.gains.map((g) => ({ module: nodeName(g.module_node_id), gain: g.gain_cents === null ? null : g.gain_cents / 100 })),
+      moduleGains: b.gains.map((g) => ({
+        nodeRef: nodeRef(g.module_node_id),
+        module: nodeName(g.module_node_id),
+        gain: g.gain_cents === null ? null : g.gain_cents / 100,
+      })),
       income: b.catAmounts
         .filter((ca) => b.catItems.find((i) => i.id === ca.cat_item_id)?.direction === 'income')
         .map((ca) => ({ cat: catKeyPath(b.catItems, ca.cat_item_id), amount: ca.amount_cents / 100 })),
@@ -291,7 +333,7 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
     aiAnalyses.push({ analysisDate: a.analysis_date, assetMonth: a.asset_month, payload: JSON.parse(a.payload_json) });
   }
 
-  // ---- v2：折旧参数（node_id → 配置版本 + 名称路径） ----
+  // ---- 折旧参数（node → 配置版本 + ref） ----
   const depreciations: NonNullable<BackupPayload['depreciations']> = [];
   const { results: depRows } = await db
     .prepare(
@@ -308,13 +350,13 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
       market_salvage_value: number | null; node_config_id: number | null;
     }>();
   for (const d of depRows) {
-    // 以节点实际所属配置为准（config_id 与 node 归属不一致时以 node 为准，保证路径可解析）
     const ownerConfigId = d.node_config_id ?? d.config_id;
     const nodes = nodesByConfigId.get(ownerConfigId);
     const version = configVersionById.get(ownerConfigId);
     if (!nodes || version === undefined) continue; // 极端脏数据：跳过而非产出不可恢复的条目
     depreciations.push({
       treeConfigVersion: version,
+      nodeRef: refByVersion.get(version)?.get(d.node_id),
       nodeKey: nodeKeyPath(nodes, d.node_id),
       depreciationCategory: d.depreciation_category,
       originalValue: d.original_value,
@@ -326,7 +368,7 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
     });
   }
 
-  // ---- v2：重估记录 ----
+  // ---- 重估记录 ----
   const revaluations: NonNullable<BackupPayload['revaluations']> = [];
   const { results: revRows } = await db
     .prepare(
@@ -348,6 +390,7 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
     if (!nodes || version === undefined) continue;
     revaluations.push({
       treeConfigVersion: version,
+      nodeRef: refByVersion.get(version)?.get(r.node_id),
       nodeKey: nodeKeyPath(nodes, r.node_id),
       revaluationDate: r.revaluation_date,
       previousValue: r.previous_value_cents / 100,
@@ -359,7 +402,7 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
     });
   }
 
-  // ---- v2：或有负债（不计入负债总额） ----
+  // ---- 或有负债（不计入负债总额） ----
   const contingentLiabilities: NonNullable<BackupPayload['contingentLiabilities']> = [];
   const { results: clRows } = await db
     .prepare('SELECT * FROM contingent_liabilities ORDER BY id ASC')
@@ -382,7 +425,7 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
     });
   }
 
-  // ---- v2：健康阈值配置 ----
+  // ---- 健康阈值配置 ----
   const healthConfig: NonNullable<BackupPayload['healthConfig']> = [];
   const { results: hcRows } = await db.prepare('SELECT key, value FROM health_config ORDER BY key ASC').all<{ key: string; value: string }>();
   for (const r of hcRows) healthConfig.push({ key: r.key, value: r.value });
@@ -403,7 +446,14 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
   };
 }
 
-/** 先校验（§3.25/§3.27 同一校验器）：非法逐条列出，不改变任何数据 */
+/**
+ * 先校验（§3.25/§3.27 同一校验器）：非法逐条列出，不改变任何数据。
+ *
+ * v3 起额外强制「引用唯一性」——这是恢复能在单事务内跑完的前提：
+ * 同一 config 内节点 ref 唯一；同一快照内 assets / moduleGains 的节点引用唯一；
+ * 负债名称唯一。历史 v1/v2 文件仍按名称路径校验，但会显式拒绝「路径碰撞」，
+ * 避免重名节点在恢复时塌成一个 id 触发 UNIQUE 冲突。
+ */
 export function validateBackupPayload(p: unknown): ErrorDetail[] {
   const errors: ErrorDetail[] = [];
   if (!p || typeof p !== 'object' || Array.isArray(p)) {
@@ -418,6 +468,7 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
     return errors;
   }
   const schemaVersion = Number(b.schemaVersion);
+  const isV3 = schemaVersion >= 3;
   for (const key of ['treeConfigs', 'catConfigs', 'debts', 'snapshots'] as const) {
     if (!Array.isArray(b[key])) errors.push({ field: key, message: `${key} 缺失或不是数组` });
   }
@@ -425,7 +476,7 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
   if (!Array.isArray(b.reportSnapshots)) b.reportSnapshots = [];
   if (!Array.isArray(b.aiAnalyses)) b.aiAnalyses = [];
 
-  // v2 必含四组扩展数据：缺失说明文件被截断，宁可报错也不静默丢数据
+  // v2+ 必含四组扩展数据：缺失说明文件被截断，宁可报错也不静默丢数据
   if (schemaVersion >= 2) {
     for (const key of ['depreciations', 'revaluations', 'contingentLiabilities', 'healthConfig'] as const) {
       if (!Array.isArray(b[key])) {
@@ -435,8 +486,9 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
     if (errors.length > 0) return errors;
   }
 
-  // treeConfigs：parentKey 链可在本配置内解析
-  const treeKeysByVersion = new Map<number, Set<string>>();
+  // ---- treeConfigs ----
+  /** version → 该配置内全部可解析的节点引用（v3 为 ref，v1/v2 为名称路径） */
+  const treeRefsByVersion = new Map<number, Set<string>>();
   b.treeConfigs!.forEach((cfg, ci) => {
     const cf = `treeConfigs[${ci}]`;
     if (typeof cfg.version !== 'number') errors.push({ field: `${cf}.version`, message: 'version 必须为数字' });
@@ -445,12 +497,56 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
       errors.push({ field: `${cf}.nodes`, message: '节点列表缺失或为空' });
       return;
     }
-    // 两遍校验：先收集全部节点键，再校验父路径存在（与数组顺序无关）
+
+    if (isV3) {
+      // v3：ref 唯一 + parentRef 可解析
+      const refs = new Set<string>();
+      const dupRefs: string[] = [];
+      cfg.nodes.forEach((n, ni) => {
+        const nf = `${cf}.nodes[${ni}]`;
+        if (typeof n.ref !== 'string' || n.ref.length === 0) {
+          errors.push({ field: `${nf}.ref`, message: 'v3 节点缺少唯一引用 ref' });
+          return;
+        }
+        if (refs.has(n.ref)) dupRefs.push(n.ref);
+        refs.add(n.ref);
+      });
+      if (dupRefs.length > 0) {
+        errors.push({ field: `${cf}.nodes`, message: `节点引用重复：${[...new Set(dupRefs)].join('、')}` });
+      }
+      cfg.nodes.forEach((n, ni) => {
+        const nf = `${cf}.nodes[${ni}]`;
+        if (typeof n.name !== 'string' || n.name.length === 0) errors.push({ field: `${nf}.name`, message: '节点名称缺失' });
+        if (!['module', 'sub', 'leaf'].includes(n.nodeType)) errors.push({ field: `${nf}.nodeType`, message: '节点类型非法' });
+        if (n.parentRef !== null && n.parentRef !== undefined && !refs.has(n.parentRef)) {
+          errors.push({ field: `${nf}.parentRef`, message: `父节点引用不存在：${String(n.parentRef)}` });
+        }
+        if (n.assetCategory !== undefined && n.assetCategory !== null && !(ASSET_CATEGORIES as readonly string[]).includes(String(n.assetCategory))) {
+          errors.push({ field: `${nf}.assetCategory`, message: "assetCategory 须为 'financial'/'physical'" });
+        }
+        if (n.liquidity !== undefined && n.liquidity !== null && !(LIQUIDITIES as readonly string[]).includes(String(n.liquidity))) {
+          errors.push({ field: `${nf}.liquidity`, message: "liquidity 须为 'high'/'medium'/'low'" });
+        }
+      });
+      treeRefsByVersion.set(cfg.version, refs);
+      return;
+    }
+
+    // v1/v2：名称路径。先收集，再检测碰撞（同一路径出现 ≥2 次 → 无法无歧义恢复）
     const keys = new Set<string>();
+    const collisions = new Map<string, number>();
     cfg.nodes.forEach((n) => {
-      const key = n.parentKey === null || n.parentKey === undefined ? n.name : `${n.parentKey}>${n.name}`;
+      const key = keyOfNode(n);
+      if (keys.has(key)) collisions.set(key, (collisions.get(key) ?? 1) + 1);
       keys.add(key);
     });
+    if (collisions.size > 0) {
+      const detail = [...collisions.entries()].map(([k, c]) => `${k}（${c} 个）`).join('、');
+      errors.push({
+        field: `${cf}.nodes`,
+        message: `存在同路径重名节点，无法无歧义恢复：${detail}。该文件为 v${schemaVersion} 旧格式，请重新导出备份（v3 起使用唯一引用）后再恢复`,
+      });
+    }
     cfg.nodes.forEach((n, ni) => {
       const nf = `${cf}.nodes[${ni}]`;
       if (typeof n.name !== 'string' || n.name.length === 0) errors.push({ field: `${nf}.name`, message: '节点名称缺失' });
@@ -465,10 +561,10 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
         errors.push({ field: `${nf}.liquidity`, message: "liquidity 须为 'high'/'medium'/'low'" });
       }
     });
-    treeKeysByVersion.set(cfg.version, keys);
+    treeRefsByVersion.set(cfg.version, keys);
   });
 
-  // catConfigs：两级、方向合法、父名存在
+  // ---- catConfigs ----
   const catKeysByVersion = new Map<number, Set<string>>();
   b.catConfigs!.forEach((cfg, ci) => {
     const cf = `catConfigs[${ci}]`;
@@ -478,9 +574,16 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
       errors.push({ field: `${cf}.items`, message: '分类列表缺失或为空' });
       return;
     }
-    // 两遍校验：先收集全部分类键，再校验父分类存在（与数组顺序无关）
     const keys = new Set<string>();
-    cfg.items.forEach((it) => keys.add(`${it.direction}:${it.name}`));
+    const dupNames: string[] = [];
+    cfg.items.forEach((it) => {
+      const k = `${it.direction}:${it.name}`;
+      if (keys.has(k)) dupNames.push(k);
+      keys.add(k);
+    });
+    if (dupNames.length > 0) {
+      errors.push({ field: `${cf}.items`, message: `分类在同一方向下重名：${[...new Set(dupNames)].join('、')}` });
+    }
     cfg.items.forEach((it, ii) => {
       const inf = `${cf}.items[${ii}]`;
       if (typeof it.name !== 'string' || it.name.length === 0) errors.push({ field: `${inf}.name`, message: '分类名缺失' });
@@ -492,18 +595,26 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
     catKeysByVersion.set(cfg.version, keys);
   });
 
-  // debts
+  // ---- debts（名称必须唯一：快照明细按名称回挂） ----
   const debtNames = new Set<string>();
+  const dupDebtNames: string[] = [];
   b.debts!.forEach((d, di) => {
     const df = `debts[${di}]`;
-    if (typeof d.name !== 'string' || d.name.length === 0) errors.push({ field: `${df}.name`, message: '负债名称缺失' });
-    else debtNames.add(d.name);
+    if (typeof d.name !== 'string' || d.name.length === 0) {
+      errors.push({ field: `${df}.name`, message: '负债名称缺失' });
+    } else {
+      if (debtNames.has(d.name)) dupDebtNames.push(d.name);
+      debtNames.add(d.name);
+    }
     if (!['mortgage', 'auto_loan', 'credit_card', 'other'].includes(d.debtType)) errors.push({ field: `${df}.debtType`, message: '负债类型非法' });
     if (!['short', 'long'].includes(d.term)) errors.push({ field: `${df}.term`, message: '期限非法' });
     if (typeof d.balance !== 'number' || d.balance < 0) errors.push({ field: `${df}.balance`, message: '余额非法' });
   });
+  if (dupDebtNames.length > 0) {
+    errors.push({ field: 'debts', message: `负债名称重复：${[...new Set(dupDebtNames)].join('、')}` });
+  }
 
-  // snapshots：月份唯一、引用可解析
+  // ---- snapshots ----
   const monthsSeen = new Set<string>();
   b.snapshots!.forEach((s, si) => {
     const sf = `snapshots[${si}]`;
@@ -513,24 +624,66 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
     }
     if (monthsSeen.has(s.month)) errors.push({ field: `${sf}.month`, message: `月份重复：${s.month}` });
     monthsSeen.add(s.month);
-    const treeKeys = treeKeysByVersion.get(s.treeConfigVersion);
-    if (!treeKeys) errors.push({ field: `${sf}.treeConfigVersion`, message: `引用的资产树版本不存在：v${s.treeConfigVersion}` });
+    const treeRefs = treeRefsByVersion.get(s.treeConfigVersion);
+    if (!treeRefs) errors.push({ field: `${sf}.treeConfigVersion`, message: `引用的资产树版本不存在：v${s.treeConfigVersion}` });
     const catKeys = catKeysByVersion.get(s.catConfigVersion);
     if (!catKeys) errors.push({ field: `${sf}.catConfigVersion`, message: `引用的分类版本不存在：v${s.catConfigVersion}` });
+
     // CR-023：assets 缺失必须显式报错（原可选链静默通过）
     if (!Array.isArray(s.assets)) {
       errors.push({ field: `${sf}.assets`, message: 'assets 数组缺失' });
     } else {
+      // 引用唯一性：同一快照内不允许同一节点出现两次（否则撞 UNIQUE(snapshot_id,node_id)）
+      const seenRefs = new Map<string, number>();
+      const dupRefs: string[] = [];
       s.assets.forEach((a, ai) => {
-        if (treeKeys && !treeKeys.has(a.nodeKey)) {
-          errors.push({ field: `${sf}.assets[${ai}].nodeKey`, message: '节点路径在资产树配置中不存在' });
+        const ref = isV3 ? a.nodeRef : a.nodeKey;
+        if (typeof ref !== 'string' || ref.length === 0) {
+          errors.push({
+            field: `${sf}.assets[${ai}].${isV3 ? 'nodeRef' : 'nodeKey'}`,
+            message: isV3 ? 'v3 资产明细缺少 nodeRef' : '节点路径缺失',
+          });
+          return;
+        }
+        if (seenRefs.has(ref)) dupRefs.push(ref);
+        seenRefs.set(ref, (seenRefs.get(ref) ?? 0) + 1);
+        if (treeRefs && !treeRefs.has(ref)) {
+          errors.push({
+            field: `${sf}.assets[${ai}].${isV3 ? 'nodeRef' : 'nodeKey'}`,
+            message: `节点引用在资产树配置中不存在：${ref}`,
+          });
         }
       });
+      if (dupRefs.length > 0) {
+        errors.push({
+          field: `${sf}.assets`,
+          message: `同一快照内节点重复：${[...new Set(dupRefs)].join('、')}（恢复会撞唯一约束）`,
+        });
+      }
     }
+
+    // moduleGains：同一快照内模块不重复
+    const seenGains = new Set<string>();
+    const dupGains: string[] = [];
+    (s.moduleGains ?? []).forEach((g, gi) => {
+      const ref = isV3 ? g.nodeRef : g.module;
+      if (typeof ref !== 'string' || ref.length === 0) {
+        errors.push({ field: `${sf}.moduleGains[${gi}].${isV3 ? 'nodeRef' : 'module'}`, message: '收益明细的节点引用缺失' });
+        return;
+      }
+      if (seenGains.has(ref)) dupGains.push(ref);
+      seenGains.add(ref);
+      if (treeRefs && !treeRefs.has(ref)) {
+        errors.push({ field: `${sf}.moduleGains[${gi}].${isV3 ? 'nodeRef' : 'module'}`, message: `节点引用在资产树配置中不存在：${ref}` });
+      }
+    });
+    if (dupGains.length > 0) {
+      errors.push({ field: `${sf}.moduleGains`, message: `同一快照内收益节点重复：${[...new Set(dupGains)].join('、')}` });
+    }
+
     for (const dir of ['income', 'expense'] as const) {
       (s[dir] ?? []).forEach((x, xi) => {
         if (!catKeys) return;
-        // CR-023：cat 非字符串时不再抛异常（收集错误而非 500）
         if (typeof x.cat !== 'string' || x.cat.length === 0) {
           errors.push({ field: `${sf}.${dir}[${xi}].cat`, message: '分类路径缺失或非法' });
           return;
@@ -554,34 +707,38 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
         errors.push({ field: `${sf}.largeItems[${li_i}].cat`, message: `大额明细分类不存在：${li.cat}` });
       }
     });
+    const seenDebts = new Set<string>();
     s.debts?.forEach((d, di) => {
       if (!debtNames.has(d.name)) errors.push({ field: `${sf}.debts[${di}].name`, message: `负债不存在：${d.name}` });
+      if (seenDebts.has(d.name)) errors.push({ field: `${sf}.debts[${di}].name`, message: `同一快照内负债重复：${d.name}` });
+      seenDebts.add(d.name);
     });
   });
 
-  // v2：折旧 / 重估的节点引用必须可解析（否则恢复会写坏外键）
+  // ---- 折旧 / 重估的节点引用必须可解析 ----
   const checkNodeRef = (items: unknown[] | undefined, label: string) => {
     (items ?? []).forEach((raw, i) => {
-      const it = raw as { treeConfigVersion?: unknown; nodeKey?: unknown };
+      const it = raw as { treeConfigVersion?: unknown; nodeRef?: unknown; nodeKey?: unknown };
       const f = `${label}[${i}]`;
-      const keys = typeof it?.treeConfigVersion === 'number' ? treeKeysByVersion.get(it.treeConfigVersion) : undefined;
-      if (!keys) {
+      const refs = typeof it?.treeConfigVersion === 'number' ? treeRefsByVersion.get(it.treeConfigVersion) : undefined;
+      if (!refs) {
         errors.push({ field: `${f}.treeConfigVersion`, message: `引用的资产树版本不存在：v${String(it?.treeConfigVersion)}` });
         return;
       }
-      if (typeof it.nodeKey !== 'string' || it.nodeKey.length === 0) {
-        errors.push({ field: `${f}.nodeKey`, message: '节点路径缺失' });
+      const ref = isV3 ? it.nodeRef : it.nodeKey;
+      if (typeof ref !== 'string' || ref.length === 0) {
+        errors.push({ field: `${f}.${isV3 ? 'nodeRef' : 'nodeKey'}`, message: isV3 ? 'v3 条目缺少 nodeRef' : '节点路径缺失' });
         return;
       }
-      if (!keys.has(it.nodeKey)) {
-        errors.push({ field: `${f}.nodeKey`, message: `节点路径在资产树配置中不存在：${it.nodeKey}` });
+      if (!refs.has(ref)) {
+        errors.push({ field: `${f}.${isV3 ? 'nodeRef' : 'nodeKey'}`, message: `节点引用在资产树配置中不存在：${ref}` });
       }
     });
   };
   checkNodeRef(b.depreciations, 'depreciations');
   checkNodeRef(b.revaluations, 'revaluations');
 
-  // v2：或有负债枚举值
+  // ---- 或有负债枚举值 ----
   const CL_TYPES = ['guarantee', 'litigation', 'commitment', 'other'];
   const CL_PROBS = ['probable', 'possible', 'remote'];
   const CL_STATUS = ['active', 'resolved', 'expired'];
@@ -594,31 +751,61 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
     if (!CL_STATUS.includes(r.status)) errors.push({ field: `${f}.status`, message: '状态非法' });
   });
 
-  // v2：健康配置键值
+  // ---- 健康配置键值 ----
+  const hcKeys = new Set<string>();
+  const dupHc: string[] = [];
   (b.healthConfig ?? []).forEach((r, i) => {
     const f = `healthConfig[${i}]`;
     if (typeof r.key !== 'string' || r.key.length === 0) errors.push({ field: `${f}.key`, message: 'key 缺失' });
+    else {
+      if (hcKeys.has(r.key)) dupHc.push(r.key);
+      hcKeys.add(r.key);
+    }
     if (typeof r.value !== 'string') errors.push({ field: `${f}.value`, message: 'value 必须为字符串' });
   });
+  if (dupHc.length > 0) {
+    errors.push({ field: 'healthConfig', message: `健康阈值键重复：${[...new Set(dupHc)].join('、')}` });
+  }
 
   return errors;
 }
 
+/** 把多行 VALUES 按 D1 绑定参数上限拆分 */
+function chunkedInsert<T>(
+  db: Env['DB'],
+  sqlPrefix: string,
+  cols: number,
+  rows: T[],
+  mapper: (row: T) => unknown[]
+): ReturnType<Env['DB']['prepare']>[] {
+  if (rows.length === 0) return [];
+  const chunkSize = Math.max(1, Math.floor(MAX_BIND_VARS / cols));
+  const stmts: ReturnType<Env['DB']['prepare']>[] = [];
+  const values = (n: number, c: number) => Array(n).fill(`(${Array(c).fill('?').join(',')})`).join(',');
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const chunk = rows.slice(i, i + chunkSize);
+    stmts.push(db.prepare(`${sqlPrefix} VALUES ${values(chunk.length, cols)}`).bind(...chunk.flatMap(mapper)));
+  }
+  return stmts;
+}
+
 /**
- * 恢复（事务内清空业务表并重放；users/sessions 不受影响，05 §3.25）。
+ * 恢复：清空业务表并按备份重建（users/sessions 不受影响，05 §3.25）。
  * 调用前必须已通过 validateBackupPayload。
  *
+ * 原子性：全流程使用**预分配的显式主键**（不读 last_row_id），所有语句合成单个
+ * `db.batch`（= 单事务）。任何一条失败整批回滚，不会留下半恢复状态。
  * 删除顺序即外键依赖顺序：先删引用方（明细/扩展表），再删被引用方（tree_nodes/tree_configs）。
- * asset_depreciation / asset_revaluations 均外键引用 tree_nodes(id)，必须在 tree_nodes 之前清空。
  */
 export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
   const now = new Date().toISOString();
   const schemaVersion = Number(p.schemaVersion);
-  const isV2 = schemaVersion >= 2;
+  const isV3 = schemaVersion >= 3;
+  const hasExtended = schemaVersion >= 2;
   const warnings: string[] = [];
 
   // v1 备份不含折旧/重估：清空后无法回填，先统计以便告警
-  if (!isV2) {
+  if (!hasExtended) {
     const dep = await db.prepare('SELECT COUNT(*) AS c FROM asset_depreciation').first<{ c: number }>();
     const rev = await db.prepare('SELECT COUNT(*) AS c FROM asset_revaluations').first<{ c: number }>();
     const depCount = dep?.c ?? 0;
@@ -632,7 +819,72 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
     warnings.push('该备份为 v1 格式：或有负债与健康阈值配置不在备份内，已保留当前值未做改动。');
   }
 
-  const deletes: ReturnType<Env['DB']['prepare']>[] = [
+  // ================= 预分配主键 =================
+  const treeConfigIdByVersion = new Map<number, number>();
+  p.treeConfigs.forEach((cfg, i) => treeConfigIdByVersion.set(cfg.version, i + 1));
+
+  /**
+   * 节点标识 → 新 node_id。
+   * v3 用 ref；v1/v2 用名称路径（此时校验器已保证路径无碰撞）。
+   */
+  const nodeIdByVersion = new Map<number, Map<string, number>>();
+  const treeNodeRows: { id: number; configId: number; node: BackupTreePayloadNode; parentId: number | null }[] = [];
+  let nextNodeId = 1;
+  for (const cfg of p.treeConfigs) {
+    const configId = treeConfigIdByVersion.get(cfg.version)!;
+    const map = new Map<string, number>();
+    const local: { id: number; node: BackupTreePayloadNode }[] = [];
+    for (const n of cfg.nodes) {
+      const id = nextNodeId++;
+      local.push({ id, node: n });
+      map.set(isV3 ? String(n.ref) : keyOfNode(n), id);
+    }
+    nodeIdByVersion.set(cfg.version, map);
+    for (const { id, node } of local) {
+      let parentId: number | null = null;
+      if (isV3 ? node.parentRef !== null && node.parentRef !== undefined : node.parentKey !== null) {
+        const parentKey = isV3 ? String(node.parentRef) : String(node.parentKey);
+        parentId = map.get(parentKey) ?? null;
+      }
+      treeNodeRows.push({ id, configId, node, parentId });
+    }
+  }
+
+  const catConfigIdByVersion = new Map<number, number>();
+  p.catConfigs.forEach((cfg, i) => catConfigIdByVersion.set(cfg.version, i + 1));
+
+  const catItemIdByVersion = new Map<number, Map<string, number>>();
+  const catItemRows: { id: number; configId: number; item: BackupPayload['catConfigs'][number]['items'][number]; parentId: number | null }[] = [];
+  let nextCatItemId = 1;
+  for (const cfg of p.catConfigs) {
+    const configId = catConfigIdByVersion.get(cfg.version)!;
+    const map = new Map<string, number>();
+    const local: { id: number; item: BackupPayload['catConfigs'][number]['items'][number] }[] = [];
+    for (const it of cfg.items) {
+      const id = nextCatItemId++;
+      local.push({ id, item: it });
+      map.set(`${it.direction}:${it.name}`, id);
+    }
+    catItemIdByVersion.set(cfg.version, map);
+    for (const { id, item } of local) {
+      const parentId = item.parentName === null || item.parentName === undefined
+        ? null
+        : map.get(`${item.direction}:${item.parentName}`) ?? null;
+      catItemRows.push({ id, configId, item, parentId });
+    }
+  }
+
+  const debtIdByName = new Map<string, number>();
+  p.debts.forEach((d, i) => debtIdByName.set(d.name, i + 1));
+
+  const snapshotIdByMonth = new Map<string, number>();
+  p.snapshots.forEach((s, i) => snapshotIdByMonth.set(s.month, i + 1));
+
+  // ================= 构造语句 =================
+  const stmts: ReturnType<Env['DB']['prepare']>[] = [];
+
+  // ---- 清空（外键顺序：先引用方，后被引用方） ----
+  stmts.push(
     db.prepare('DELETE FROM correction_logs'),
     // 扩展表必须先于 tree_nodes / tree_configs 删除（外键 NO ACTION，D1 强制）
     db.prepare('DELETE FROM asset_revaluations'),
@@ -644,297 +896,333 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
     db.prepare('DELETE FROM snapshot_assets'),
     db.prepare('DELETE FROM monthly_snapshots'),
     db.prepare('DELETE FROM report_snapshots'),
-    db.prepare('DELETE FROM ai_analyses'),
-  ];
-  if (isV2) {
-    // v2 为全量覆盖：或有负债 / 健康配置随备份重建；v1 不含这两张表 → 保留原值
-    deletes.push(db.prepare('DELETE FROM contingent_liabilities'));
-    deletes.push(db.prepare('DELETE FROM health_config'));
+    db.prepare('DELETE FROM ai_analyses')
+  );
+  if (hasExtended) {
+    // v2+ 为全量覆盖：或有负债 / 健康配置随备份重建；v1 不含 → 保留原值
+    stmts.push(db.prepare('DELETE FROM contingent_liabilities'), db.prepare('DELETE FROM health_config'));
   }
-  deletes.push(
+  stmts.push(
     db.prepare('DELETE FROM debts'),
     db.prepare('DELETE FROM cat_items'),
     db.prepare('DELETE FROM cat_configs'),
     db.prepare('DELETE FROM tree_nodes'),
     db.prepare('DELETE FROM tree_configs')
   );
-  await db.batch(deletes);
 
-  // ---- tree configs（名称路径 → 新 id） ----
-  const treeNodeIdByVersion = new Map<number, Map<string, number>>();
-  const treeConfigIdByVersion = new Map<number, number>();
-  for (const cfg of p.treeConfigs) {
-    const res = await db.prepare('INSERT INTO tree_configs (version, effective_from_month, note, created_at) VALUES (?, ?, ?, ?)')
-      .bind(cfg.version, cfg.effectiveFromMonth, cfg.note ?? null, now)
-      .run();
-    const configId = Number(res.meta.last_row_id);
-    treeConfigIdByVersion.set(cfg.version, configId);
-    const keyToId = new Map<string, number>();
-    // 先插（父置空），再回填父引用
-    const ids: number[] = [];
-    for (const n of cfg.nodes) {
-      const r = await db.prepare(
-        `INSERT INTO tree_nodes (config_id, parent_id, name, node_type, target_rate_annual, update_freq, enabled, sort_order,
-         identity_info, is_placeholder, asset_category, liquidity, created_at)
-         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-        .bind(
-          configId,
-          n.name,
-          n.nodeType,
-          n.targetRateAnnual ?? null,
-          n.updateFreq ?? null,
-          n.enabled ? 1 : 0,
-          n.sortOrder ?? 0,
-          n.identityInfo ?? null,
-          n.isPlaceholder ? 1 : 0,
-          // v1 备份无这两列 → 回退默认值（与迁移 0003/0007 的 DEFAULT 一致）
-          (ASSET_CATEGORIES as readonly string[]).includes(String(n.assetCategory)) ? String(n.assetCategory) : 'financial',
-          (LIQUIDITIES as readonly string[]).includes(String(n.liquidity)) ? String(n.liquidity) : 'medium',
-          now
-        )
-        .run();
-      const id = Number(r.meta.last_row_id);
-      ids.push(id);
-      const key = n.parentKey === null ? n.name : `${n.parentKey}>${n.name}`;
-      keyToId.set(key, id);
+  // ---- tree_configs / tree_nodes ----
+  stmts.push(
+    ...chunkedInsert(db, 'INSERT INTO tree_configs (id, version, effective_from_month, note, created_at)', 5, p.treeConfigs,
+      (cfg) => [treeConfigIdByVersion.get(cfg.version)!, cfg.version, cfg.effectiveFromMonth, cfg.note ?? null, now])
+  );
+  // 先插入（parent_id 置空），再统一回填父引用，避免父行尚未存在时触发外键
+  stmts.push(
+    ...chunkedInsert(
+      db,
+      `INSERT INTO tree_nodes (id, config_id, parent_id, name, node_type, target_rate_annual, update_freq, enabled,
+       sort_order, identity_info, is_placeholder, asset_category, liquidity, created_at)`,
+      14,
+      treeNodeRows,
+      ({ id, configId, node: n }) => [
+        id,
+        configId,
+        null,
+        n.name,
+        n.nodeType,
+        n.targetRateAnnual ?? null,
+        n.updateFreq ?? null,
+        n.enabled ? 1 : 0,
+        n.sortOrder ?? 0,
+        n.identityInfo ?? null,
+        n.isPlaceholder ? 1 : 0,
+        // v1 备份无这两列 → 回退默认值（与迁移 0003/0007 的 DEFAULT 一致）
+        (ASSET_CATEGORIES as readonly string[]).includes(String(n.assetCategory)) ? String(n.assetCategory) : 'financial',
+        (LIQUIDITIES as readonly string[]).includes(String(n.liquidity)) ? String(n.liquidity) : 'medium',
+        now,
+      ]
+    )
+  );
+  for (const row of treeNodeRows) {
+    if (row.parentId !== null) {
+      stmts.push(db.prepare('UPDATE tree_nodes SET parent_id = ? WHERE id = ?').bind(row.parentId, row.id));
     }
-    for (let i = 0; i < cfg.nodes.length; i++) {
-      const n = cfg.nodes[i];
-      if (n.parentKey !== null) {
-        const parentId = keyToId.get(n.parentKey);
-        if (parentId !== undefined) {
-          await db.prepare('UPDATE tree_nodes SET parent_id = ? WHERE id = ?').bind(parentId, ids[i]).run();
-        }
-      }
-    }
-    treeNodeIdByVersion.set(cfg.version, keyToId);
   }
 
-  // ---- cat configs ----
-  const catItemIdByVersion = new Map<number, Map<string, number>>();
-  const catConfigIdByVersion = new Map<number, number>();
-  for (const cfg of p.catConfigs) {
-    const res = await db.prepare('INSERT INTO cat_configs (version, threshold_cents, created_at) VALUES (?, ?, ?)')
-      .bind(cfg.version, Math.round(cfg.threshold * 100), now)
-      .run();
-    const configId = Number(res.meta.last_row_id);
-    catConfigIdByVersion.set(cfg.version, configId);
-    const keyToId = new Map<string, number>();
-    const ids: number[] = [];
-    for (const it of cfg.items) {
-      const r = await db.prepare('INSERT INTO cat_items (config_id, parent_id, direction, name, sort_order, created_at) VALUES (?, NULL, ?, ?, ?, ?)')
-        .bind(configId, it.direction, it.name, it.sortOrder ?? 0, now)
-        .run();
-      const id = Number(r.meta.last_row_id);
-      ids.push(id);
-      keyToId.set(`${it.direction}:${it.name}`, id);
+  // ---- cat_configs / cat_items ----
+  stmts.push(
+    ...chunkedInsert(db, 'INSERT INTO cat_configs (id, version, threshold_cents, created_at)', 4, p.catConfigs,
+      (cfg) => [catConfigIdByVersion.get(cfg.version)!, cfg.version, Math.round(cfg.threshold * 100), now])
+  );
+  stmts.push(
+    ...chunkedInsert(
+      db,
+      'INSERT INTO cat_items (id, config_id, parent_id, direction, name, sort_order, created_at)',
+      7,
+      catItemRows,
+      ({ id, configId, item }) => [id, configId, null, item.direction, item.name, item.sortOrder ?? 0, now]
+    )
+  );
+  for (const row of catItemRows) {
+    if (row.parentId !== null) {
+      stmts.push(db.prepare('UPDATE cat_items SET parent_id = ? WHERE id = ?').bind(row.parentId, row.id));
     }
-    for (let i = 0; i < cfg.items.length; i++) {
-      const it = cfg.items[i];
-      if (it.parentName !== null) {
-        const parentId = keyToId.get(`${it.direction}:${it.parentName}`);
-        if (parentId !== undefined) {
-          await db.prepare('UPDATE cat_items SET parent_id = ? WHERE id = ?').bind(parentId, ids[i]).run();
-        }
-      }
-    }
-    catItemIdByVersion.set(cfg.version, keyToId);
   }
+
   // ---- debts ----
-  const debtIdByName = new Map<string, number>();
-  for (const d of p.debts) {
-    const r = await db.prepare(
-      `INSERT INTO debts (name, debt_type, term, balance_cents, annual_rate, monthly_payment_cents, fixed_repayment, enabled, sort_order, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  stmts.push(
+    ...chunkedInsert(
+      db,
+      `INSERT INTO debts (id, name, debt_type, term, balance_cents, annual_rate, monthly_payment_cents,
+       fixed_repayment, enabled, sort_order, created_at, updated_at)`,
+      12,
+      p.debts,
+      (d) => [
+        debtIdByName.get(d.name)!,
+        d.name,
+        d.debtType,
+        d.term,
+        Math.round(d.balance * 100),
+        d.annualRate,
+        Math.round(d.monthlyPayment * 100),
+        d.fixedRepayment ? 1 : 0,
+        d.enabled ? 1 : 0,
+        debtIdByName.get(d.name)! - 1,
+        now,
+        now,
+      ]
     )
-      .bind(d.name, d.debtType, d.term, Math.round(d.balance * 100), d.annualRate, Math.round(d.monthlyPayment * 100), d.fixedRepayment ? 1 : 0, d.enabled ? 1 : 0, debtIdByName.size, now, now)
-      .run();
-    debtIdByName.set(d.name, Number(r.meta.last_row_id));
-  }
+  );
 
-  // ---- monthly snapshots ----
+  // ---- monthly_snapshots 及明细（汇总按明细重算，保证勾稽） ----
+  const assetRows: unknown[][] = [];
+  const gainRows: unknown[][] = [];
+  const snapDebtRows: unknown[][] = [];
+  const catAmountRows: unknown[][] = [];
+  const largeItemRows: unknown[][] = [];
+  const missingNodes: string[] = [];
+
   for (const s of p.snapshots) {
-    const treeConfigId = treeConfigIdByVersion.get(s.treeConfigVersion)!;
-    const catConfigId = catConfigIdByVersion.get(s.catConfigVersion)!;
-    const nodeIds = treeNodeIdByVersion.get(s.treeConfigVersion)!;
+    const snapshotId = snapshotIdByMonth.get(s.month)!;
+    const nodeIds = nodeIdByVersion.get(s.treeConfigVersion)!;
     const catIds = catItemIdByVersion.get(s.catConfigVersion)!;
+    const resolveNode = (a: { nodeRef?: string; nodeKey?: string }) => {
+      const ref = isV3 ? a.nodeRef : a.nodeKey;
+      return typeof ref === 'string' ? nodeIds.get(ref) : undefined;
+    };
+    const resolveGainNode = (g: { nodeRef?: string; module?: string }) => {
+      const ref = isV3 ? g.nodeRef : g.module;
+      return typeof ref === 'string' ? nodeIds.get(ref) : undefined;
+    };
 
-    const totalAssets = Math.round(s.assets.reduce((x, a) => x + a.balance, 0) * 100);
-    const totalIncome = Math.round(s.income.reduce((x, a) => x + a.amount, 0) * 100);
-    const totalExpense = Math.round(s.expense.reduce((x, a) => x + a.amount, 0) * 100);
-    const totalDebt = Math.round(s.debts.reduce((x, a) => x + a.balance, 0) * 100);
-    const res = await db.prepare(
-      `INSERT INTO monthly_snapshots (month, tree_config_id, cat_config_id, total_assets_cents, total_debt_cents,
-       total_income_cents, total_expense_cents, created_at, updated_at, corrected_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    for (const a of s.assets) {
+      const nodeId = resolveNode(a);
+      if (nodeId === undefined) {
+        missingNodes.push(`${s.month}:${isV3 ? a.nodeRef : a.nodeKey}`);
+        continue;
+      }
+      assetRows.push([snapshotId, nodeId, Math.round(a.balance * 100), a.hasNewFunds ? 1 : 0, a.updateSource]);
+    }
+    for (const g of s.moduleGains ?? []) {
+      const nodeId = resolveGainNode(g);
+      if (nodeId === undefined) {
+        missingNodes.push(`${s.month}:${isV3 ? g.nodeRef : g.module}`);
+        continue;
+      }
+      gainRows.push([snapshotId, nodeId, g.gain === null || g.gain === undefined ? null : Math.round(g.gain * 100)]);
+    }
+    for (const d of s.debts) {
+      snapDebtRows.push([snapshotId, debtIdByName.get(d.name) ?? 0, Math.round(d.balance * 100), Math.round(d.repayment * 100)]);
+    }
+    for (const x of s.income) {
+      catAmountRows.push([snapshotId, catIds.get(`income:${x.cat.split('>')[1]}`) ?? catIds.get(`income:${x.cat}`) ?? 0, Math.round(x.amount * 100)]);
+    }
+    for (const x of s.expense) {
+      catAmountRows.push([snapshotId, catIds.get(`expense:${x.cat.split('>')[1]}`) ?? catIds.get(`expense:${x.cat}`) ?? 0, Math.round(x.amount * 100)]);
+    }
+    for (const li of s.largeItems) {
+      largeItemRows.push([
+        snapshotId,
+        li.direction,
+        catIds.get(`${li.direction}:${li.cat.split('>')[1]}`) ?? catIds.get(`${li.direction}:${li.cat}`) ?? 0,
+        li.name,
+        Math.round(li.amount * 100),
+        now,
+      ]);
+    }
+  }
+
+  // 汇总 = 明细重算（与校验阶段无关，保证 total_* 恒等于明细 SUM）
+  const totalsBySnapshot = new Map<number, { assets: number; income: number; expense: number; debt: number }>();
+  for (const s of p.snapshots) {
+    const snapshotId = snapshotIdByMonth.get(s.month)!;
+    totalsBySnapshot.set(snapshotId, {
+      assets: s.assets.reduce((x, a) => x + Math.round(a.balance * 100), 0),
+      income: s.income.reduce((x, a) => x + Math.round(a.amount * 100), 0),
+      expense: s.expense.reduce((x, a) => x + Math.round(a.amount * 100), 0),
+      debt: s.debts.reduce((x, a) => x + Math.round(a.balance * 100), 0),
+    });
+  }
+  stmts.push(
+    ...chunkedInsert(
+      db,
+      `INSERT INTO monthly_snapshots (id, month, tree_config_id, cat_config_id, total_assets_cents, total_debt_cents,
+       total_income_cents, total_expense_cents, created_at, updated_at, corrected_at)`,
+      11,
+      p.snapshots,
+      (s) => {
+        const id = snapshotIdByMonth.get(s.month)!;
+        const t = totalsBySnapshot.get(id)!;
+        return [
+          id,
+          s.month,
+          treeConfigIdByVersion.get(s.treeConfigVersion)!,
+          catConfigIdByVersion.get(s.catConfigVersion)!,
+          t.assets,
+          t.debt,
+          t.income,
+          t.expense,
+          now,
+          now,
+          s.correctedAt ?? null,
+        ];
+      }
     )
-      .bind(s.month, treeConfigId, catConfigId, totalAssets, totalDebt, totalIncome, totalExpense, now, now, s.correctedAt ?? null)
-      .run();
-    const snapshotId = Number(res.meta.last_row_id);
-
-    const detailStmts: ReturnType<Env['DB']['prepare']>[] = [];
-    const values = (n: number, cols: number) => Array(n).fill(`(${Array(cols).fill('?').join(',')})`).join(',');
-    if (s.assets.length > 0) {
-      detailStmts.push(
-        db.prepare(`INSERT INTO snapshot_assets (snapshot_id, node_id, balance_cents, has_new_funds, update_source) VALUES ${values(s.assets.length, 5)}`)
-          .bind(...s.assets.flatMap((a) => [snapshotId, nodeIds.get(a.nodeKey) ?? 0, Math.round(a.balance * 100), a.hasNewFunds ? 1 : 0, a.updateSource]))
-      );
-    }
-    if (s.moduleGains.length > 0) {
-      // CR-005：module 已按节点全路径名称导出（与 assets.nodeKey 同构），直接命中 nodeIds；
-      // 旧版备份（叶子名）匹配失败时降级为 0 并记录，不再静默写入脏行语义。
-      const rows = s.moduleGains.map((g) => {
-        let moduleId = nodeIds.get(g.module) ?? 0;
-        if (moduleId === 0) {
-          // 兼容旧备份：全路径 key 的末段 == 叶子名 时也命中
-          for (const [key, id] of nodeIds) {
-            if (key.split('>').pop() === g.module) { moduleId = id; break; }
-          }
-        }
-        return [snapshotId, moduleId, g.gain === null ? null : Math.round(g.gain * 100)];
-      });
-      detailStmts.push(
-        db.prepare(`INSERT INTO snapshot_gains (snapshot_id, module_node_id, gain_cents) VALUES ${values(rows.length, 3)}`)
-          .bind(...rows.flat())
-      );
-    }
-    if (s.debts.length > 0) {
-      detailStmts.push(
-        db.prepare(`INSERT INTO snapshot_debts (snapshot_id, debt_id, balance_cents, repayment_cents) VALUES ${values(s.debts.length, 4)}`)
-          .bind(...s.debts.flatMap((d) => [snapshotId, debtIdByName.get(d.name) ?? 0, Math.round(d.balance * 100), Math.round(d.repayment * 100)]))
-      );
-    }
-    const catRows = [
-      ...s.income.map((x) => [snapshotId, catIds.get(`income:${x.cat.split('>')[1]}`) ?? catIds.get(`income:${x.cat}`) ?? 0, Math.round(x.amount * 100)]),
-      ...s.expense.map((x) => [snapshotId, catIds.get(`expense:${x.cat.split('>')[1]}`) ?? catIds.get(`expense:${x.cat}`) ?? 0, Math.round(x.amount * 100)]),
-    ];
-    if (catRows.length > 0) {
-      detailStmts.push(
-        db.prepare(`INSERT INTO snapshot_cat_amounts (snapshot_id, cat_item_id, amount_cents) VALUES ${values(catRows.length, 3)}`)
-          .bind(...catRows.flat())
-      );
-    }
-    if (s.largeItems.length > 0) {
-      detailStmts.push(
-        db.prepare(`INSERT INTO snapshot_large_items (snapshot_id, direction, cat_item_id, name, amount_cents, created_at) VALUES ${values(s.largeItems.length, 6)}`)
-          .bind(...s.largeItems.flatMap((li) => [
-            snapshotId,
-            li.direction,
-            catIds.get(`${li.direction}:${li.cat.split('>')[1]}`) ?? catIds.get(`${li.direction}:${li.cat}`) ?? 0,
-            li.name,
-            Math.round(li.amount * 100),
-            now,
-          ]))
-      );
-    }
-    if (detailStmts.length > 0) await db.batch(detailStmts);
-  }
-
-  // ---- report snapshots & ai analyses ----
-  for (const r of p.reportSnapshots) {
-    await db.prepare(
-      `INSERT INTO report_snapshots (report_type, start_month, end_month, generated_at, total_assets_cents, net_worth_cents, debt_ratio, period_balance_cents, payload_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  );
+  stmts.push(
+    ...chunkedInsert(db, 'INSERT INTO snapshot_assets (snapshot_id, node_id, balance_cents, has_new_funds, update_source)', 5, assetRows, (r) => r),
+    ...chunkedInsert(db, 'INSERT INTO snapshot_gains (snapshot_id, module_node_id, gain_cents)', 3, gainRows, (r) => r),
+    ...chunkedInsert(db, 'INSERT INTO snapshot_debts (snapshot_id, debt_id, balance_cents, repayment_cents)', 4, snapDebtRows, (r) => r),
+    ...chunkedInsert(db, 'INSERT INTO snapshot_cat_amounts (snapshot_id, cat_item_id, amount_cents)', 3, catAmountRows, (r) => r),
+    ...chunkedInsert(
+      db,
+      'INSERT INTO snapshot_large_items (snapshot_id, direction, cat_item_id, name, amount_cents, created_at)',
+      6,
+      largeItemRows,
+      (r) => r
     )
-      .bind(
-        r.reportType,
-        r.startMonth,
-        r.endMonth,
-        r.generatedAt,
-        Math.round(((r.payload as { kpis?: { totalAssets?: number } })?.kpis?.totalAssets ?? 0) * 100),
-        Math.round(((r.payload as { kpis?: { netWorth?: number } })?.kpis?.netWorth ?? 0) * 100),
-        (r.payload as { kpis?: { debtRatio?: number } })?.kpis?.debtRatio ?? 0,
-        Math.round(((r.payload as { kpis?: { periodBalance?: number } })?.kpis?.periodBalance ?? 0) * 100),
-        JSON.stringify(r.payload)
-      )
-      .run();
-  }
-  for (const a of p.aiAnalyses) {
-    await db.prepare('INSERT INTO ai_analyses (analysis_date, asset_month, payload_json, created_at) VALUES (?, ?, ?, ?)')
-      .bind(a.analysisDate, a.assetMonth, JSON.stringify(a.payload), now)
-      .run();
-  }
+  );
 
-  // ---- v2：折旧参数（配置版本 + 名称路径 → 新 node_id） ----
-  let restoredDepreciations = 0;
+  // ---- report_snapshots / ai_analyses ----
+  stmts.push(
+    ...chunkedInsert(
+      db,
+      `INSERT INTO report_snapshots (report_type, start_month, end_month, generated_at, total_assets_cents,
+       net_worth_cents, debt_ratio, period_balance_cents, payload_json)`,
+      9,
+      p.reportSnapshots,
+      (r) => {
+        const payload = r.payload as { kpis?: { totalAssets?: number; netWorth?: number; debtRatio?: number; periodBalance?: number } };
+        return [
+          r.reportType,
+          r.startMonth,
+          r.endMonth,
+          r.generatedAt,
+          Math.round((payload?.kpis?.totalAssets ?? 0) * 100),
+          Math.round((payload?.kpis?.netWorth ?? 0) * 100),
+          payload?.kpis?.debtRatio ?? 0,
+          Math.round((payload?.kpis?.periodBalance ?? 0) * 100),
+          JSON.stringify(r.payload),
+        ];
+      }
+    ),
+    ...chunkedInsert(
+      db,
+      'INSERT INTO ai_analyses (analysis_date, asset_month, payload_json, created_at)',
+      4,
+      p.aiAnalyses,
+      (a) => [a.analysisDate, a.assetMonth, JSON.stringify(a.payload), now]
+    )
+  );
+
+  // ---- 折旧参数（配置版本 + ref → 新 node_id） ----
+  const depRowsOut: unknown[][] = [];
   let skippedDepreciations = 0;
   for (const d of p.depreciations ?? []) {
+    const nodeId = isV3
+      ? nodeIdByVersion.get(d.treeConfigVersion)?.get(String(d.nodeRef))
+      : nodeIdByVersion.get(d.treeConfigVersion)?.get(String(d.nodeKey));
     const configId = treeConfigIdByVersion.get(d.treeConfigVersion);
-    const nodeId = treeNodeIdByVersion.get(d.treeConfigVersion)?.get(d.nodeKey);
-    if (configId === undefined || nodeId === undefined) {
+    if (nodeId === undefined || configId === undefined) {
       skippedDepreciations++;
       continue;
     }
-    await db.prepare(
-      `INSERT INTO asset_depreciation (node_id, config_id, depreciation_category, original_value, purchase_date,
-       useful_life_months, salvage_rate, salvage_mode, market_salvage_value, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-      .bind(
-        nodeId,
-        configId,
-        d.depreciationCategory,
-        d.originalValue,
-        d.purchaseDate,
-        d.usefulLifeMonths,
-        d.salvageRate,
-        d.salvageMode,
-        d.marketSalvageValue ?? null,
-        now
-      )
-      .run();
-    restoredDepreciations++;
+    depRowsOut.push([
+      nodeId,
+      configId,
+      d.depreciationCategory,
+      d.originalValue,
+      d.purchaseDate,
+      d.usefulLifeMonths,
+      d.salvageRate,
+      d.salvageMode,
+      d.marketSalvageValue ?? null,
+      now,
+    ]);
   }
+  stmts.push(
+    ...chunkedInsert(
+      db,
+      `INSERT INTO asset_depreciation (node_id, config_id, depreciation_category, original_value, purchase_date,
+       useful_life_months, salvage_rate, salvage_mode, market_salvage_value, created_at)`,
+      10,
+      depRowsOut,
+      (r) => r
+    )
+  );
   if (skippedDepreciations > 0) {
-    warnings.push(`${skippedDepreciations} 条折旧配置因节点路径无法解析被跳过（其余已恢复）。`);
+    warnings.push(`${skippedDepreciations} 条折旧配置因节点引用无法解析被跳过（其余已恢复）。`);
   }
 
-  // ---- v2：重估记录（created_by 不导出 → NULL，避免跨实例用户 id 误挂） ----
-  let restoredRevaluations = 0;
+  // ---- 重估记录（created_by 不导出 → NULL，避免跨实例用户 id 误挂） ----
+  const revRowsOut: unknown[][] = [];
   let skippedRevaluations = 0;
   for (const r of p.revaluations ?? []) {
-    const nodeId = treeNodeIdByVersion.get(r.treeConfigVersion)?.get(r.nodeKey);
+    const nodeId = isV3
+      ? nodeIdByVersion.get(r.treeConfigVersion)?.get(String(r.nodeRef))
+      : nodeIdByVersion.get(r.treeConfigVersion)?.get(String(r.nodeKey));
     if (nodeId === undefined) {
       skippedRevaluations++;
       continue;
     }
     const changeCents = Math.round(r.newValue * 100) - Math.round(r.previousValue * 100);
-    await db.prepare(
-      `INSERT INTO asset_revaluations (node_id, revaluation_date, previous_value_cents, new_value_cents, change_cents,
-       change_type, reason, appraiser, created_by, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`
-    )
-      .bind(
-        nodeId,
-        r.revaluationDate,
-        Math.round(r.previousValue * 100),
-        Math.round(r.newValue * 100),
-        Number.isFinite(r.change) ? Math.round(r.change * 100) : changeCents,
-        r.changeType === 'appreciation' || r.changeType === 'depreciation'
-          ? r.changeType
-          : (changeCents >= 0 ? 'appreciation' : 'depreciation'),
-        r.reason ?? null,
-        r.appraiser ?? null,
-        now
-      )
-      .run();
-    restoredRevaluations++;
+    revRowsOut.push([
+      nodeId,
+      r.revaluationDate,
+      Math.round(r.previousValue * 100),
+      Math.round(r.newValue * 100),
+      Number.isFinite(r.change) ? Math.round(r.change * 100) : changeCents,
+      r.changeType === 'appreciation' || r.changeType === 'depreciation'
+        ? r.changeType
+        : (changeCents >= 0 ? 'appreciation' : 'depreciation'),
+      r.reason ?? null,
+      r.appraiser ?? null,
+      now,
+    ]);
   }
+  stmts.push(
+    ...chunkedInsert(
+      db,
+      `INSERT INTO asset_revaluations (node_id, revaluation_date, previous_value_cents, new_value_cents, change_cents,
+       change_type, reason, appraiser, created_by, created_at)`,
+      10,
+      revRowsOut,
+      ([nodeId, date, prev, next, change, type, reason, appraiser, ts]) => [nodeId, date, prev, next, change, type, reason, appraiser, null, ts]
+    )
+  );
   if (skippedRevaluations > 0) {
-    warnings.push(`${skippedRevaluations} 条重估记录因节点路径无法解析被跳过（其余已恢复）。`);
+    warnings.push(`${skippedRevaluations} 条重估记录因节点引用无法解析被跳过（其余已恢复）。`);
   }
 
-  // ---- v2：或有负债 ----
-  let restoredContingent = 0;
-  if (isV2) {
-    for (const r of p.contingentLiabilities ?? []) {
-      await db.prepare(
+  // ---- 或有负债 ----
+  if (hasExtended) {
+    stmts.push(
+      ...chunkedInsert(
+        db,
         `INSERT INTO contingent_liabilities (name, liability_type, estimated_amount_cents, probability, counterparty,
-         start_date, expiry_date, description, status, created_by, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`
-      )
-        .bind(
+         start_date, expiry_date, description, status, created_by, created_at, updated_at)`,
+        12,
+        p.contingentLiabilities ?? [],
+        (r) => [
           r.name,
           r.liabilityType,
           Math.round(r.estimatedAmount * 100),
@@ -944,31 +1232,42 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
           r.expiryDate ?? null,
           r.description ?? null,
           r.status,
+          null,
           now,
-          now
-        )
-        .run();
-      restoredContingent++;
-    }
+          now,
+        ]
+      )
+    );
   }
 
-  // ---- v2：健康阈值配置（v1 备份不含 → 只补齐缺失键，绝不覆盖用户已定制的值） ----
-  let restoredHealthConfig = 0;
-  if (isV2) {
-    for (const r of p.healthConfig ?? []) {
-      await db.prepare('INSERT OR REPLACE INTO health_config (key, value, updated_at) VALUES (?, ?, ?)')
-        .bind(r.key, r.value, now)
-        .run();
-      restoredHealthConfig++;
-    }
-  } else {
-    // v1：health_config 未被删除，这里仅 INSERT OR IGNORE 补齐缺省键（幂等，不改动既有值）
-    for (const d of HEALTH_CONFIG_DEFAULTS) {
-      await db.prepare('INSERT OR IGNORE INTO health_config (key, value, updated_at) VALUES (?, ?, ?)')
-        .bind(d.key, d.value, now)
-        .run();
-    }
-    restoredHealthConfig = HEALTH_CONFIG_DEFAULTS.length;
+  // ---- 健康阈值配置（v1 备份不含 → 只补齐缺失键，绝不覆盖用户已定制的值） ----
+  const healthRows = hasExtended
+    ? (p.healthConfig ?? []).map((r) => [r.key, r.value, now])
+    : HEALTH_CONFIG_DEFAULTS.map((r) => [r.key, r.value, now]);
+  stmts.push(
+    ...chunkedInsert(
+      db,
+      hasExtended
+        ? 'INSERT INTO health_config (key, value, updated_at)'
+        : 'INSERT OR IGNORE INTO health_config (key, value, updated_at)',
+      3,
+      healthRows,
+      (r) => r
+    )
+  );
+
+  // ================= 一次性原子提交 =================
+  if (stmts.length > MAX_RESTORE_STATEMENTS) {
+    // 在删除任何数据之前拒绝：宁可恢复失败，也不留半恢复状态
+    throw new Error(
+      `备份规模超出单次恢复上限（${stmts.length} 条语句 > ${MAX_RESTORE_STATEMENTS}）。`
+      + '已中止且未修改任何数据。'
+    );
+  }
+  await db.batch(stmts);
+
+  if (missingNodes.length > 0) {
+    warnings.push(`${missingNodes.length} 条快照明细因节点引用无法解析被跳过：${missingNodes.slice(0, 5).join('，')}${missingNodes.length > 5 ? ' 等' : ''}`);
   }
 
   return {
@@ -982,10 +1281,10 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
       snapshots: p.snapshots.length,
       reportSnapshots: p.reportSnapshots.length,
       aiAnalyses: p.aiAnalyses.length,
-      depreciations: restoredDepreciations,
-      revaluations: restoredRevaluations,
-      contingentLiabilities: restoredContingent,
-      healthConfig: restoredHealthConfig,
+      depreciations: depRowsOut.length,
+      revaluations: revRowsOut.length,
+      contingentLiabilities: hasExtended ? (p.contingentLiabilities ?? []).length : 0,
+      healthConfig: healthRows.length,
     },
   };
 }

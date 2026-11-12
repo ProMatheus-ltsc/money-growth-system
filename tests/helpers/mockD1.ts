@@ -8,13 +8,19 @@ export type DbHandler = (sql: string, args: unknown[]) => unknown;
 
 export interface MockDb extends Record<string, unknown> {
   __calls: { sql: string; args: unknown[] }[];
+  /** bind 时记录的语句快照（含绑定参数），用于断言「写入了哪些列/值」，与 __calls 互不影响 */
+  __bound: { sql: string; args: unknown[] }[];
 }
 
 export function mockDb(handler: DbHandler): Env['DB'] {
   const calls: { sql: string; args: unknown[] }[] = [];
+  const bound: { sql: string; args: unknown[] }[] = [];
 
   const makeStmt = (sql: string, args: unknown[]) => ({
-    bind: (...next: unknown[]) => makeStmt(sql, next),
+    bind: (...next: unknown[]) => {
+      bound.push({ sql, args: next });
+      return makeStmt(sql, next);
+    },
     first: async () => {
       calls.push({ sql, args });
       const r = handler(sql, args);
@@ -38,6 +44,7 @@ export function mockDb(handler: DbHandler): Env['DB'] {
     },
     batch: async (list: unknown[]) => list.map(() => ({ success: true, meta: { last_row_id: 1 } })),
     __calls: calls,
+    __bound: bound,
   };
   return db as unknown as Env['DB'];
 }
