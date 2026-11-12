@@ -1,5 +1,9 @@
 # 单元测试必跑（REQ-007 / COMP-005）：任何 push / PR 触发回归保护。
 # 站点依赖含 file:../shared-core，CI 用最小 stub 满足安装后跑 npm test（含覆盖率阈值）。
+#
+# 注意（2026-11-12 修复）：step 的 name 里若出现「冒号 + 空格」（例如 "(file: dependency)"），
+# 未加引号会被 YAML 解析成嵌套映射，导致整个工作流解析失败 —— 表现为 run 立即 failure、
+# jobs 数为 0、日志下载 404（并非测试失败）。所有含冒号/特殊字符的标量必须加引号。
 name: test
 on:
   push:
@@ -14,7 +18,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.18'
-      - name: Stub sibling @shared/core (file: dependency not on CI)
+      - name: 'Stub sibling @shared/core (file: dependency not on CI)'
         run: |
           mkdir -p ../shared-core/src
           printf '{"name":"@shared/core","version":"0.0.0","type":"module","main":"src/index.ts"}\n' > ../shared-core/package.json
