@@ -307,11 +307,21 @@ export async function validateSnapshotInput(
 
 /**
  * 写入快照（新增或覆盖，D1 batch = 单事务）。返回写入后的汇总（元）。
+ *
+ * 负债主档同步规则（04 §4.2 修订）：`debts.balance_cents` 是「最新月」的余额快照，
+ * 只允许由「当前月保存」推进；历史纠错（POST /snapshots/:month/correct）不得回写主档，
+ * 否则把 8/9 月的旧余额写成主档，污染负债管理页、首页默认值与后续快照默认值。
+ * 故同步条件为 month > 现存最大月（用 month > MAX(month) 而非 >= ，覆盖「补录更早历史月」场景）。
  */
 export async function writeSnapshot(db: Env['DB'], month: string, v: ValidatedSnapshot) {
   const now = new Date().toISOString();
   const existing = await getSnapshotRow(db, month);
   let snapshotId: number;
+
+  // 本写入是否「推进/覆盖最新月」——必须在插入之前取 MAX，插入后 MAX 就是自己。
+  // 只有最新月的余额才代表负债主档现值；更早月份的写入（历史纠错/补录）一律不动主档。
+  const maxMonth = (await db.prepare('SELECT MAX(month) AS m FROM monthly_snapshots').first<{ m: string | null }>())?.m ?? null;
+  const syncDebtMaster = maxMonth === null || month >= maxMonth;
 
   if (existing) {
     snapshotId = existing.id;
@@ -338,7 +348,7 @@ export async function writeSnapshot(db: Env['DB'], month: string, v: ValidatedSn
           snapshotId
         ),
       ...detailInsertStmts(db, snapshotId, v, now),
-      ...debtSyncStmts(db, v, now),
+      ...debtSyncStmts(db, v, now, syncDebtMaster),
     ];
     await db.batch(stmts);
   } else {
@@ -363,7 +373,7 @@ export async function writeSnapshot(db: Env['DB'], month: string, v: ValidatedSn
       )
       .run();
     snapshotId = Number(res.meta.last_row_id);
-    const stmts = [...detailInsertStmts(db, snapshotId, v, now), ...debtSyncStmts(db, v, now)];
+    const stmts = [...detailInsertStmts(db, snapshotId, v, now), ...debtSyncStmts(db, v, now, syncDebtMaster)];
     try {
       if (stmts.length > 0) await db.batch(stmts);
     } catch (e) {
@@ -391,11 +401,16 @@ export async function writeSnapshot(db: Env['DB'], month: string, v: ValidatedSn
       balance: (t.totalIncomeCents - t.totalExpenseCents) / 100,
     },
     updatedAt: now,
+    debtMasterSynced: syncDebtMaster,
   };
 }
 
-/** 负债主档余额同步语句（04 §4.2：保存快照时由服务端同步为最新月余额） */
-function debtSyncStmts(db: Env['DB'], v: ValidatedSnapshot, now: string) {
+/**
+ * 负债主档余额同步语句（04 §4.2：保存快照时由服务端同步为最新月余额）。
+ * `enabled=false` 表示本次写入不推进最新月（历史纠错/补录），此时不得回写主档。
+ */
+function debtSyncStmts(db: Env['DB'], v: ValidatedSnapshot, now: string, enabled: boolean) {
+  if (!enabled) return [];
   return v.debts.map((d) =>
     db.prepare('UPDATE debts SET balance_cents = ?, updated_at = ? WHERE id = ?').bind(d.balance_cents, now, d.debt_id)
   );

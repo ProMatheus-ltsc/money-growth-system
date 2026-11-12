@@ -10,7 +10,8 @@ import { ApiError, authFailed, conflict, forbidden, invalidParam, lockedOut } fr
 import { fail, ok } from '../lib/http';
 import { derivePasswordHash, newToken, randomSaltHex } from '../lib/password';
 import { strField, USERNAME_RE, idParam } from '../lib/validate';
-import { requireAuth, parseToken, type AppEnv } from '../middleware/auth';
+import { requireAdmin, requireAuth, parseToken, type AppEnv } from '../middleware/auth';
+import { pruneStaleAuthRows } from '../services/maintenance';
 
 /** 账号级：连续失败后锁定时长（分钟） */
 const LOCK_MINUTES = 15;
@@ -23,6 +24,23 @@ const TOKEN_TTL_DAYS = 7;
 const IP_MAX_ATTEMPTS = 10;
 /** IP 级限流：锁定时长（分钟） */
 const IP_LOCK_MINUTES = 30;
+
+/**
+ * 邀请码脱敏：审计日志只留「长度 + 8 位 SHA-256 前缀」，
+ * 既能追查「是否重复输错同一串」，又不把用户可能误填的正确邀请码以明文入库。
+ */
+async function inviteCodeFingerprint(code: string): Promise<string> {
+  try {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code));
+    const hex = Array.from(new Uint8Array(digest))
+      .slice(0, 4)
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    return `len=${code.length} fp=${hex}`;
+  } catch {
+    return `len=${code.length}`;
+  }
+}
 
 const auth = new Hono<AppEnv>();
 
@@ -85,6 +103,10 @@ auth.post('/verify-invite', async (c) => {
   const now = new Date();
   const nowIso = now.toISOString();
 
+  // 惰性运维清理（过期 session / gate_token / 陈旧 IP 计数 / 过期审计）：
+  // 本端点是未鉴权且低频的入口，最适合承载「无 scheduled handler」场景下的清理。
+  await pruneStaleAuthRows(c.env.DB, now);
+
   // IP 限流检查（与登录共用同一个 IP 计数器）
   const ipRecord = await c.env.DB.prepare('SELECT failed_attempts, locked_until FROM ip_rate_limit WHERE ip = ?')
     .bind(clientIp)
@@ -110,8 +132,11 @@ auth.post('/verify-invite', async (c) => {
   }
   if (code !== expected) {
     await recordIpFailure(c.env.DB, clientIp, nowIso, now);
+    // 脱敏（P2）：原实现把用户输入的邀请码明文写入 login_audit_log.reason，
+    // 一旦误把正确邀请码填到错误位置即明文落库。改为「长度 + 哈希前缀」，保留可追溯性。
+    const fp = await inviteCodeFingerprint(code);
     await c.env.DB.prepare('INSERT INTO login_audit_log (ip, username, success, reason, created_at) VALUES (?, ?, 0, ?, ?)')
-      .bind(clientIp, null, '邀请码错误: ' + code, nowIso).run();
+      .bind(clientIp, null, `邀请码错误(${fp})`, nowIso).run();
     return fail(c, 'INVALID', '邀请码不正确', 403);
   }
 
@@ -299,6 +324,38 @@ auth.post('/logout', async (c) => {
 auth.get('/me', requireAuth, (c) => {
   const user = c.get('user');
   return ok(c, { username: user.username, role: user.role });
+});
+
+/**
+ * 运维维护：清理过期 session / gate_token / 陈旧 IP 限流行 / 过期审计日志。
+ * - POST 实际执行（仅 admin）；GET 返回将清理的规模预览（只读，方便核对后再执行）。
+ * - 说明：Pages Functions 无 scheduled handler，日常靠 /verify-invite 惰性清理，本端点供手动收敛。
+ */
+auth.post('/maintenance', requireAuth, requireAdmin, async (c) => {
+  const result = await pruneStaleAuthRows(c.env.DB);
+  return ok(c, { pruned: result });
+});
+
+auth.get('/maintenance', requireAuth, requireAdmin, async (c) => {
+  const nowIso = new Date().toISOString();
+  const [sessions, gateTokens, ipRows, audits] = await Promise.all([
+    c.env.DB.prepare('SELECT COUNT(*) AS c FROM sessions WHERE expires_at < ?').bind(nowIso).first<{ c: number }>(),
+    c.env.DB.prepare('SELECT COUNT(*) AS c FROM gate_tokens WHERE expires_at < ?').bind(nowIso).first<{ c: number }>(),
+    c.env.DB.prepare(
+      `SELECT COUNT(*) AS c FROM ip_rate_limit
+       WHERE last_attempt_at < datetime('now', '-1 day')
+         AND (locked_until IS NULL OR locked_until < ?)`
+    ).bind(nowIso).first<{ c: number }>(),
+    c.env.DB.prepare(`SELECT COUNT(*) AS c FROM login_audit_log WHERE created_at < datetime('now', '-180 day')`).first<{ c: number }>(),
+  ]);
+  return ok(c, {
+    preview: {
+      sessions: sessions?.c ?? 0,
+      gateTokens: gateTokens?.c ?? 0,
+      ipRateLimit: ipRows?.c ?? 0,
+      loginAudit: audits?.c ?? 0,
+    },
+  });
 });
 
 export default auth;

@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /**
- * S9 线上动态冒烟（2026-08-27，V1.4 去 R2 后）
+ * S9 线上动态冒烟（2026-08-27，V1.4 去 R2 后；2026-11 备份 v2 修订）
  * 覆盖核心路径：邀请码门控 → 登录 → 资产树/分类 → 负债 → 当月快照（勾稽）→
- * 报表 → 本地备份导出 → AI 导出 → PDF → 折旧/健康/用户管理扩展。
+ * 报表 → 本地备份导出（v2 四组扩展数据）→ 备份校验器拒绝路径 → AI 导出 → PDF →
+ * 折旧/健康/用户管理/运维清理扩展。
  *
  * 用法（Node 18+，内置 fetch）：
  *   node scripts/smoke-online.mjs <BASE_URL> <INVITE_CODE> <ADMIN_USER> <ADMIN_PASS>
  *   例：node scripts/smoke-online.mjs https://money-growth-sys.pages.dev FAM2026 admin admin123456
  *
  * 前置：已初始化管理员账号（POST /api/auth/init 完成）。
+ * 注意：⑤b 只做「非法 payload 被拒」校验，不会真正覆盖线上数据。
  */
 const BASE = (process.argv[2] || 'https://money-growth-sys.pages.dev').replace(/\/$/, '');
 const CODE = process.argv[3];
@@ -54,6 +56,12 @@ let gateToken = '';
 
   const rNoCode = await api('/api/auth/login', { method: 'POST', body: { username: UNAME, password: UPASS } });
   check('无 gateToken 登录被拒 (GATE_REQUIRED)', rNoCode.status === 403 && rNoCode.json?.error?.code === 'GATE_REQUIRED', `${rNoCode.status} ${rNoCode.json?.error?.code}`);
+
+  // 错误邀请码：必须 403，且审计日志不得回显明文（响应里也不得出现用户输入）
+  const wrongCode = `WRONG-${Date.now()}`;
+  const rWrong = await api('/api/auth/verify-invite', { method: 'POST', body: { code: wrongCode } });
+  check('错误邀请码被拒 (403)', rWrong.status === 403, `${rWrong.status}`);
+  check('错误邀请码不在响应中回显', !JSON.stringify(rWrong.json ?? {}).includes(wrongCode), JSON.stringify(rWrong.json?.error));
 }
 
 let token = '';
@@ -155,11 +163,33 @@ console.log('④ 报表');
 
 // ---------- 5. 备份导出（本地） ----------
 console.log('⑤ 本地备份导出');
+let exportPayload = null;
 {
   const r = await fetch(`${BASE}/api/backups/export`, { headers: { Authorization: `Bearer ${token}` } });
   let parsed = null;
   try { parsed = await r.json(); } catch { /* 附件流或非 JSON */ }
-  check('GET /api/backups/export', r.status === 200 && parsed && parsed.schemaVersion === 1 && Array.isArray(parsed.treeConfigs) && Array.isArray(parsed.snapshots), `status=${r.status} schema=${parsed?.schemaVersion}`);
+  exportPayload = parsed;
+  check('GET /api/backups/export', r.status === 200 && parsed && parsed.schemaVersion === 2 && Array.isArray(parsed.treeConfigs) && Array.isArray(parsed.snapshots), `status=${r.status} schema=${parsed?.schemaVersion}`);
+  // v2：扩展数据必须入备份，且节点必须带资产分类/流动性
+  check('备份含折旧/重估/或有负债/健康阈值四组数据',
+    parsed && ['depreciations', 'revaluations', 'contingentLiabilities', 'healthConfig'].every((k) => Array.isArray(parsed[k])),
+    `keys=${parsed ? Object.keys(parsed).join(',') : 'null'}`);
+  const anyNode = parsed?.treeConfigs?.[0]?.nodes?.[0] ?? {};
+  check('备份节点含 assetCategory/liquidity',
+    ['financial', 'physical'].includes(anyNode.assetCategory) && ['high', 'medium', 'low'].includes(anyNode.liquidity),
+    JSON.stringify({ assetCategory: anyNode.assetCategory, liquidity: anyNode.liquidity }));
+}
+
+// ---------- 5b. 备份恢复自校验（不写库：故意用非法 payload 触发校验拒绝） ----------
+console.log('⑤b 恢复校验器（只校验，不改变数据）');
+{
+  // 缺 assets 的 payload 必须被拒（400 + 字段级 details），且现有数据不受影响
+  const bad = JSON.parse(JSON.stringify(exportPayload ?? {}));
+  if (bad.snapshots?.[0]) bad.snapshots[0].assets = 'not-an-array';
+  const r = await api('/api/backups/import', { method: 'POST', token, body: { payload: bad } });
+  check('非法备份被拒绝 (400 + details)', r.status === 400 && Array.isArray(r.json?.error?.details) && r.json.error.details.length > 0, `${r.status} ${JSON.stringify(r.json?.error?.code)}`);
+  const r2 = await api(`/api/snapshots/${month}`, { token });
+  check('拒绝后现有数据未变更', r2.status === 200 && r2.json?.data?.exists === true, `${r2.status}`);
 }
 
 // ---------- 6. AI 导出 + PDF ----------
@@ -195,6 +225,12 @@ console.log('⑦ 扩展功能');
   check('GET /api/auth/users (admin)', rUsers.status === 200 && Array.isArray(rUsers.json?.data), `${rUsers.status} ${JSON.stringify(rUsers.json?.error)}`);
   const rReg = await api('/api/auth/register', { method: 'POST', body: {} });
   check('register 端点已删除 (404)', rReg.status === 404, `got ${rReg.status}`);
+
+  // 运维清理端点：预览只读，执行返回各表清理行数
+  const rPreview = await api('/api/auth/maintenance', { token });
+  check('GET /api/auth/maintenance 返回预览', rPreview.status === 200 && typeof rPreview.json?.data?.preview?.sessions === 'number', `${rPreview.status} ${JSON.stringify(rPreview.json?.error)}`);
+  const rPrune = await api('/api/auth/maintenance', { method: 'POST', token });
+  check('POST /api/auth/maintenance 执行清理', rPrune.status === 200 && typeof rPrune.json?.data?.pruned?.sessions === 'number', `${rPrune.status} ${JSON.stringify(rPrune.json?.error)}`);
 }
 
 // ---------- 汇总 ----------

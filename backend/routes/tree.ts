@@ -13,7 +13,7 @@ import { intField, strField } from '../lib/validate';
 import type { AppEnv } from '../middleware/auth';
 import { requireAdmin, requireAuth } from '../middleware/auth';
 import { getTreeNodes } from '../services/snapshotRepo';
-import type { TreeNodeRow } from '../services/treeUtil';
+import { nodeKeyPath, type TreeNodeRow } from '../services/treeUtil';
 
 const tree = new Hono<AppEnv>();
 
@@ -97,6 +97,17 @@ tree.post('/', requireAuth, requireAdmin, async (c) => {
     const lastSnap = await c.env.DB.prepare('SELECT MAX(month) AS m FROM monthly_snapshots').first<{ m: string | null }>();
     if (lastSnap?.m && effectiveFromMonth <= lastSnap.m) {
       errors.push({ field: 'effectiveFromMonth', message: `生效起始月份必须晚于最近一次已保存快照的月份（${lastSnap.m}）` });
+    }
+    // 单调性（04 §4.2 修订）：历史库存在 v1=2026-08 / v2,v3=2026-07 的非单调数据，
+    // 「生效月」语义是「版本自该月起生效」，越新的版本必须不早于上一版本，否则口径会倒挂。
+    const lastCfg = await c.env.DB
+      .prepare('SELECT version, effective_from_month FROM tree_configs ORDER BY version DESC LIMIT 1')
+      .first<{ version: number; effective_from_month: string }>();
+    if (lastCfg && effectiveFromMonth < lastCfg.effective_from_month) {
+      errors.push({
+        field: 'effectiveFromMonth',
+        message: `生效起始月份不得早于上一版本 v${lastCfg.version} 的生效月（${lastCfg.effective_from_month}）`,
+      });
     }
   }
 
@@ -263,29 +274,41 @@ tree.post('/', requireAuth, requireAdmin, async (c) => {
   });
   if (updateStmts.length > 0) await c.env.DB.batch(updateStmts);
 
-  // ---- 迁移折旧配置：将上一版本的折旧记录按 node 名称匹配复制到新版本 ----
-  const prevConfigId = configId - 1;
-  if (prevConfigId > 0) {
+  // ---- 迁移折旧配置：把上一版本的折旧记录按「节点全路径名称」复制到新版本 ----
+  // 原实现按节点裸名匹配，同层重名时会迁移错位；改用 nodeKeyPath（"模块>子模块>末级"）
+  // 后与备份/恢复使用的节点定位口径一致，重名也不会串台。
+  const prevCfg = await c.env.DB
+    .prepare('SELECT id, version FROM tree_configs WHERE id <> ? ORDER BY version DESC LIMIT 1')
+    .bind(configId)
+    .first<{ id: number; version: number }>();
+  if (prevCfg) {
     const prevDeps = await c.env.DB.prepare(
-      `SELECT ad.*, tn.name AS node_name FROM asset_depreciation ad
-       JOIN tree_nodes tn ON tn.id = ad.node_id AND tn.config_id = ad.config_id
+      `SELECT ad.node_id, ad.depreciation_category, ad.original_value, ad.purchase_date, ad.useful_life_months,
+              ad.salvage_rate, ad.salvage_mode, ad.market_salvage_value
+       FROM asset_depreciation ad
        WHERE ad.config_id = ?`
-    ).bind(prevConfigId).all<{ node_name: string; depreciation_category: string; original_value: number; purchase_date: string; useful_life_months: number; salvage_rate: number; salvage_mode: string; market_salvage_value: number | null }>();
+    ).bind(prevCfg.id).all<{
+      node_id: number; depreciation_category: string; original_value: number; purchase_date: string;
+      useful_life_months: number; salvage_rate: number; salvage_mode: string; market_salvage_value: number | null;
+    }>();
 
     if (prevDeps.results.length > 0) {
-      const newNodes = await c.env.DB.prepare('SELECT id, name FROM tree_nodes WHERE config_id = ?').bind(configId).all<{ id: number; name: string }>();
-      const nameToNewId = new Map<string, number>();
-      for (const nn of newNodes.results) nameToNewId.set(nn.name, nn.id);
+      const prevNodes = await getTreeNodes(c.env.DB, prevCfg.id);
+      const newNodes = await getTreeNodes(c.env.DB, configId);
+      const prevKeyById = new Map(prevNodes.map((n) => [n.id, nodeKeyPath(prevNodes, n.id)]));
+      const keyToNewId = new Map<string, number>();
+      for (const nn of newNodes) keyToNewId.set(nodeKeyPath(newNodes, nn.id), nn.id);
 
       const migStmts = prevDeps.results
-        .filter((d) => nameToNewId.has(d.node_name))
-        .map((d) =>
+        .map((d) => ({ d, key: prevKeyById.get(d.node_id) }))
+        .filter((x): x is { d: (typeof prevDeps.results)[number]; key: string } => !!x.key && keyToNewId.has(x.key))
+        .map(({ d, key }) =>
           c.env.DB.prepare(
             `INSERT INTO asset_depreciation (node_id, config_id, depreciation_category, original_value, purchase_date,
              useful_life_months, salvage_rate, salvage_mode, market_salvage_value, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
           ).bind(
-            nameToNewId.get(d.node_name)!,
+            keyToNewId.get(key)!,
             configId,
             d.depreciation_category,
             d.original_value,

@@ -1,9 +1,17 @@
 /**
  * 备份核心（05 §3.26~§3.27，F-07，V1.4 移除 R2 后仅本地备份）：
- * - 导出结构（§3.26，schemaVersion: 1）：节点引用采用「名称路径」而非数据库 id，
- *   保证跨实例可恢复；不含账号与身份信息（users/sessions 不导出）。
+ * - 导出结构（§3.26）：节点引用采用「名称路径」而非数据库 id，保证跨实例可恢复；
+ *   不含账号与身份信息（users/sessions 不导出）。
  * - 本地下载（§3.26）与本地恢复（§3.27）同一结构同一校验器；云端备份（R2）已下线（04 §7.1）。
  * - 恢复：先校验后写入；非法拒绝且不改变任何现有数据（PRD §4 数据完整性）。
+ *
+ * 格式版本：
+ * - v1：仅 treeConfigs/catConfigs/debts/snapshots/reportSnapshots/aiAnalyses；
+ *   节点缺 assetCategory/liquidity，且不含折旧/重估/或有负债/健康配置。
+ * - v2（当前）：节点补齐 assetCategory/liquidity；新增 depreciations/revaluations/
+ *   contingentLiabilities/healthConfig 四组数据；恢复为「全量覆盖」。
+ * - v1 文件仍可恢复：缺失字段回退默认值，折旧/重估因外键必须先清空（结果里给出告警），
+ *   或有负债/健康配置不受影响（这两张表不引用资产树，保留原值）。
  */
 import type { Env } from '../env';
 import type { ErrorDetail } from '../lib/errors';
@@ -11,7 +19,38 @@ import { isValidMonth } from '../lib/month';
 import { catKeyPath, getCatItems, getTreeNodes, loadBundle } from './snapshotRepo';
 import { nodeKeyPath } from './treeUtil';
 
-export const BACKUP_SCHEMA_VERSION = 1;
+/** 当前导出格式版本 */
+export const BACKUP_SCHEMA_VERSION = 2;
+/** 恢复可接受的版本（v1 为历史文件，恢复时降级处理并给出告警） */
+export const SUPPORTED_BACKUP_SCHEMA_VERSIONS: readonly number[] = [1, 2];
+
+const ASSET_CATEGORIES = ['financial', 'physical'] as const;
+const LIQUIDITIES = ['high', 'medium', 'low'] as const;
+
+/** 健康配置缺省值（迁移 0007 的种子；v1 备份恢复时用于回填） */
+const HEALTH_CONFIG_DEFAULTS: { key: string; value: string }[] = [
+  { key: 'concentration_threshold', value: '0.5' },
+  { key: 'liquidity_months_min', value: '3' },
+  { key: 'debt_service_ratio_max', value: '0.4' },
+  { key: 'savings_rate_min', value: '0.2' },
+  { key: 'cpi_annual_rate', value: '0.02' },
+];
+
+export interface BackupTreePayloadNode {
+  name: string;
+  parentKey: string | null;
+  nodeType: string;
+  targetRateAnnual: number | null;
+  updateFreq: string | null;
+  enabled: boolean;
+  sortOrder: number;
+  identityInfo: string | null;
+  isPlaceholder: boolean;
+  /** v2 起：资产分类（financial/physical）。v1 备份无此字段 → 恢复回退 financial */
+  assetCategory?: string | null;
+  /** v2 起：流动性等级（high/medium/low）。v1 备份无此字段 → 恢复回退 medium */
+  liquidity?: string | null;
+}
 
 export interface BackupPayload {
   schemaVersion: number;
@@ -20,17 +59,7 @@ export interface BackupPayload {
     version: number;
     effectiveFromMonth: string;
     note: string | null;
-    nodes: {
-      name: string;
-      parentKey: string | null;
-      nodeType: string;
-      targetRateAnnual: number | null;
-      updateFreq: string | null;
-      enabled: boolean;
-      sortOrder: number;
-      identityInfo: string | null;
-      isPlaceholder: boolean;
-    }[];
+    nodes: BackupTreePayloadNode[];
   }[];
   catConfigs: {
     version: number;
@@ -67,21 +96,64 @@ export interface BackupPayload {
     payload: unknown;
   }[];
   aiAnalyses: { analysisDate: string; assetMonth: string; payload: unknown }[];
+  /** v2：实物资产折旧参数（按配置版本 + 节点名称路径定位） */
+  depreciations?: {
+    treeConfigVersion: number;
+    nodeKey: string;
+    depreciationCategory: string;
+    originalValue: number;
+    purchaseDate: string;
+    usefulLifeMonths: number;
+    salvageRate: number;
+    salvageMode: string;
+    marketSalvageValue: number | null;
+  }[];
+  /** v2：公允价值重估记录（按配置版本 + 节点名称路径定位；created_by 不导出） */
+  revaluations?: {
+    treeConfigVersion: number;
+    nodeKey: string;
+    revaluationDate: string;
+    previousValue: number;
+    newValue: number;
+    change: number;
+    changeType: string;
+    reason: string | null;
+    appraiser: string | null;
+  }[];
+  /** v2：或有负债（不计入负债总额，仅报表附注披露；created_by 不导出） */
+  contingentLiabilities?: {
+    name: string;
+    liabilityType: string;
+    estimatedAmount: number;
+    probability: string;
+    counterparty: string | null;
+    startDate: string | null;
+    expiryDate: string | null;
+    description: string | null;
+    status: string;
+  }[];
+  /** v2：财务健康阈值配置（key/value 字符串表） */
+  healthConfig?: { key: string; value: string }[];
 }
 
 /**
  * 全库 → §3.26 导出结构（名称路径）。
- * CR-006：资产折旧/重估/或有负债/健康配置 4 张扩展表（migrations 0003~0007）暂不纳入备份
- * （恢复后需在对应页面重新录入；UI 已提示）。纳入时须同步 restoreFromPayload 的清理与重建。
+ * v2 起覆盖 0003~0007 四张扩展表；新增表时必须同步 restoreFromPayload 的清理与重放。
  */
 export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> {
   const now = new Date().toISOString();
   const treeConfigs: BackupPayload['treeConfigs'] = [];
+  /** config.id → version */
+  const configVersionById = new Map<number, number>();
+  /** config.id → 该版本节点集（用于名称路径解析） */
+  const nodesByConfigId = new Map<number, Awaited<ReturnType<typeof getTreeNodes>>>();
   const { results: cfgs } = await db.prepare('SELECT * FROM tree_configs ORDER BY version ASC').all<{
     id: number; version: number; effective_from_month: string; note: string | null;
   }>();
   for (const cfg of cfgs) {
     const nodes = await getTreeNodes(db, cfg.id);
+    configVersionById.set(cfg.id, cfg.version);
+    nodesByConfigId.set(cfg.id, nodes);
     // 拓扑排序（父先于子），保证备份文件内名称路径链前向可解析
     const byParent = new Map<number | null, typeof nodes>();
     for (const n of nodes) {
@@ -111,6 +183,8 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
         sortOrder: n.sort_order,
         identityInfo: n.identity_info,
         isPlaceholder: n.is_placeholder === 1,
+        assetCategory: n.asset_category ?? 'financial',
+        liquidity: n.liquidity ?? 'medium',
       })),
     });
   }
@@ -217,7 +291,116 @@ export async function buildExportPayload(db: Env['DB']): Promise<BackupPayload> 
     aiAnalyses.push({ analysisDate: a.analysis_date, assetMonth: a.asset_month, payload: JSON.parse(a.payload_json) });
   }
 
-  return { schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: now, treeConfigs, catConfigs, debts, snapshots, reportSnapshots, aiAnalyses };
+  // ---- v2：折旧参数（node_id → 配置版本 + 名称路径） ----
+  const depreciations: NonNullable<BackupPayload['depreciations']> = [];
+  const { results: depRows } = await db
+    .prepare(
+      `SELECT ad.node_id, ad.config_id, ad.depreciation_category, ad.original_value, ad.purchase_date,
+              ad.useful_life_months, ad.salvage_rate, ad.salvage_mode, ad.market_salvage_value,
+              tn.config_id AS node_config_id
+       FROM asset_depreciation ad
+       LEFT JOIN tree_nodes tn ON tn.id = ad.node_id
+       ORDER BY ad.id ASC`
+    )
+    .all<{
+      node_id: number; config_id: number; depreciation_category: string; original_value: number;
+      purchase_date: string; useful_life_months: number; salvage_rate: number; salvage_mode: string;
+      market_salvage_value: number | null; node_config_id: number | null;
+    }>();
+  for (const d of depRows) {
+    // 以节点实际所属配置为准（config_id 与 node 归属不一致时以 node 为准，保证路径可解析）
+    const ownerConfigId = d.node_config_id ?? d.config_id;
+    const nodes = nodesByConfigId.get(ownerConfigId);
+    const version = configVersionById.get(ownerConfigId);
+    if (!nodes || version === undefined) continue; // 极端脏数据：跳过而非产出不可恢复的条目
+    depreciations.push({
+      treeConfigVersion: version,
+      nodeKey: nodeKeyPath(nodes, d.node_id),
+      depreciationCategory: d.depreciation_category,
+      originalValue: d.original_value,
+      purchaseDate: d.purchase_date,
+      usefulLifeMonths: d.useful_life_months,
+      salvageRate: d.salvage_rate,
+      salvageMode: d.salvage_mode,
+      marketSalvageValue: d.market_salvage_value,
+    });
+  }
+
+  // ---- v2：重估记录 ----
+  const revaluations: NonNullable<BackupPayload['revaluations']> = [];
+  const { results: revRows } = await db
+    .prepare(
+      `SELECT ar.node_id, ar.revaluation_date, ar.previous_value_cents, ar.new_value_cents, ar.change_cents,
+              ar.change_type, ar.reason, ar.appraiser, tn.config_id AS node_config_id
+       FROM asset_revaluations ar
+       LEFT JOIN tree_nodes tn ON tn.id = ar.node_id
+       ORDER BY ar.id ASC`
+    )
+    .all<{
+      node_id: number; revaluation_date: string; previous_value_cents: number; new_value_cents: number;
+      change_cents: number; change_type: string; reason: string | null; appraiser: string | null;
+      node_config_id: number | null;
+    }>();
+  for (const r of revRows) {
+    if (r.node_config_id === null) continue;
+    const nodes = nodesByConfigId.get(r.node_config_id);
+    const version = configVersionById.get(r.node_config_id);
+    if (!nodes || version === undefined) continue;
+    revaluations.push({
+      treeConfigVersion: version,
+      nodeKey: nodeKeyPath(nodes, r.node_id),
+      revaluationDate: r.revaluation_date,
+      previousValue: r.previous_value_cents / 100,
+      newValue: r.new_value_cents / 100,
+      change: r.change_cents / 100,
+      changeType: r.change_type,
+      reason: r.reason,
+      appraiser: r.appraiser,
+    });
+  }
+
+  // ---- v2：或有负债（不计入负债总额） ----
+  const contingentLiabilities: NonNullable<BackupPayload['contingentLiabilities']> = [];
+  const { results: clRows } = await db
+    .prepare('SELECT * FROM contingent_liabilities ORDER BY id ASC')
+    .all<{
+      name: string; liability_type: string; estimated_amount_cents: number; probability: string;
+      counterparty: string | null; start_date: string | null; expiry_date: string | null;
+      description: string | null; status: string;
+    }>();
+  for (const r of clRows) {
+    contingentLiabilities.push({
+      name: r.name,
+      liabilityType: r.liability_type,
+      estimatedAmount: r.estimated_amount_cents / 100,
+      probability: r.probability,
+      counterparty: r.counterparty,
+      startDate: r.start_date,
+      expiryDate: r.expiry_date,
+      description: r.description,
+      status: r.status,
+    });
+  }
+
+  // ---- v2：健康阈值配置 ----
+  const healthConfig: NonNullable<BackupPayload['healthConfig']> = [];
+  const { results: hcRows } = await db.prepare('SELECT key, value FROM health_config ORDER BY key ASC').all<{ key: string; value: string }>();
+  for (const r of hcRows) healthConfig.push({ key: r.key, value: r.value });
+
+  return {
+    schemaVersion: BACKUP_SCHEMA_VERSION,
+    exportedAt: now,
+    treeConfigs,
+    catConfigs,
+    debts,
+    snapshots,
+    reportSnapshots,
+    aiAnalyses,
+    depreciations,
+    revaluations,
+    contingentLiabilities,
+    healthConfig,
+  };
 }
 
 /** 先校验（§3.25/§3.27 同一校验器）：非法逐条列出，不改变任何数据 */
@@ -227,16 +410,30 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
     return [{ field: 'payload', message: '备份内容必须为 JSON 对象' }];
   }
   const b = p as Partial<BackupPayload>;
-  if (b.schemaVersion !== BACKUP_SCHEMA_VERSION) {
-    errors.push({ field: 'schemaVersion', message: `不支持的备份版本：${String(b.schemaVersion)}（当前支持 ${BACKUP_SCHEMA_VERSION}）` });
+  if (!SUPPORTED_BACKUP_SCHEMA_VERSIONS.includes(Number(b.schemaVersion))) {
+    errors.push({
+      field: 'schemaVersion',
+      message: `不支持的备份版本：${String(b.schemaVersion)}（当前支持 ${SUPPORTED_BACKUP_SCHEMA_VERSIONS.join(' / ')}）`,
+    });
     return errors;
   }
+  const schemaVersion = Number(b.schemaVersion);
   for (const key of ['treeConfigs', 'catConfigs', 'debts', 'snapshots'] as const) {
     if (!Array.isArray(b[key])) errors.push({ field: key, message: `${key} 缺失或不是数组` });
   }
   if (errors.length > 0) return errors;
   if (!Array.isArray(b.reportSnapshots)) b.reportSnapshots = [];
   if (!Array.isArray(b.aiAnalyses)) b.aiAnalyses = [];
+
+  // v2 必含四组扩展数据：缺失说明文件被截断，宁可报错也不静默丢数据
+  if (schemaVersion >= 2) {
+    for (const key of ['depreciations', 'revaluations', 'contingentLiabilities', 'healthConfig'] as const) {
+      if (!Array.isArray(b[key])) {
+        errors.push({ field: key, message: `v${schemaVersion} 备份缺少 ${key} 数组（文件可能被截断）` });
+      }
+    }
+    if (errors.length > 0) return errors;
+  }
 
   // treeConfigs：parentKey 链可在本配置内解析
   const treeKeysByVersion = new Map<number, Set<string>>();
@@ -260,6 +457,12 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
       if (!['module', 'sub', 'leaf'].includes(n.nodeType)) errors.push({ field: `${nf}.nodeType`, message: '节点类型非法' });
       if (n.parentKey !== null && n.parentKey !== undefined && !keys.has(n.parentKey)) {
         errors.push({ field: `${nf}.parentKey`, message: `父节点路径在资产树配置中不存在：${String(n.parentKey)}` });
+      }
+      if (n.assetCategory !== undefined && n.assetCategory !== null && !(ASSET_CATEGORIES as readonly string[]).includes(String(n.assetCategory))) {
+        errors.push({ field: `${nf}.assetCategory`, message: "assetCategory 须为 'financial'/'physical'" });
+      }
+      if (n.liquidity !== undefined && n.liquidity !== null && !(LIQUIDITIES as readonly string[]).includes(String(n.liquidity))) {
+        errors.push({ field: `${nf}.liquidity`, message: "liquidity 须为 'high'/'medium'/'low'" });
       }
     });
     treeKeysByVersion.set(cfg.version, keys);
@@ -356,17 +559,84 @@ export function validateBackupPayload(p: unknown): ErrorDetail[] {
     });
   });
 
+  // v2：折旧 / 重估的节点引用必须可解析（否则恢复会写坏外键）
+  const checkNodeRef = (items: unknown[] | undefined, label: string) => {
+    (items ?? []).forEach((raw, i) => {
+      const it = raw as { treeConfigVersion?: unknown; nodeKey?: unknown };
+      const f = `${label}[${i}]`;
+      const keys = typeof it?.treeConfigVersion === 'number' ? treeKeysByVersion.get(it.treeConfigVersion) : undefined;
+      if (!keys) {
+        errors.push({ field: `${f}.treeConfigVersion`, message: `引用的资产树版本不存在：v${String(it?.treeConfigVersion)}` });
+        return;
+      }
+      if (typeof it.nodeKey !== 'string' || it.nodeKey.length === 0) {
+        errors.push({ field: `${f}.nodeKey`, message: '节点路径缺失' });
+        return;
+      }
+      if (!keys.has(it.nodeKey)) {
+        errors.push({ field: `${f}.nodeKey`, message: `节点路径在资产树配置中不存在：${it.nodeKey}` });
+      }
+    });
+  };
+  checkNodeRef(b.depreciations, 'depreciations');
+  checkNodeRef(b.revaluations, 'revaluations');
+
+  // v2：或有负债枚举值
+  const CL_TYPES = ['guarantee', 'litigation', 'commitment', 'other'];
+  const CL_PROBS = ['probable', 'possible', 'remote'];
+  const CL_STATUS = ['active', 'resolved', 'expired'];
+  (b.contingentLiabilities ?? []).forEach((r, i) => {
+    const f = `contingentLiabilities[${i}]`;
+    if (typeof r.name !== 'string' || r.name.trim().length === 0) errors.push({ field: `${f}.name`, message: '名称缺失' });
+    if (!CL_TYPES.includes(r.liabilityType)) errors.push({ field: `${f}.liabilityType`, message: '类型非法' });
+    if (typeof r.estimatedAmount !== 'number' || r.estimatedAmount < 0) errors.push({ field: `${f}.estimatedAmount`, message: '金额非法' });
+    if (!CL_PROBS.includes(r.probability)) errors.push({ field: `${f}.probability`, message: '可能性取值非法' });
+    if (!CL_STATUS.includes(r.status)) errors.push({ field: `${f}.status`, message: '状态非法' });
+  });
+
+  // v2：健康配置键值
+  (b.healthConfig ?? []).forEach((r, i) => {
+    const f = `healthConfig[${i}]`;
+    if (typeof r.key !== 'string' || r.key.length === 0) errors.push({ field: `${f}.key`, message: 'key 缺失' });
+    if (typeof r.value !== 'string') errors.push({ field: `${f}.value`, message: 'value 必须为字符串' });
+  });
+
   return errors;
 }
 
 /**
  * 恢复（事务内清空业务表并重放；users/sessions 不受影响，05 §3.25）。
  * 调用前必须已通过 validateBackupPayload。
+ *
+ * 删除顺序即外键依赖顺序：先删引用方（明细/扩展表），再删被引用方（tree_nodes/tree_configs）。
+ * asset_depreciation / asset_revaluations 均外键引用 tree_nodes(id)，必须在 tree_nodes 之前清空。
  */
 export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
   const now = new Date().toISOString();
-  const stmts: ReturnType<Env['DB']['prepare']>[] = [
+  const schemaVersion = Number(p.schemaVersion);
+  const isV2 = schemaVersion >= 2;
+  const warnings: string[] = [];
+
+  // v1 备份不含折旧/重估：清空后无法回填，先统计以便告警
+  if (!isV2) {
+    const dep = await db.prepare('SELECT COUNT(*) AS c FROM asset_depreciation').first<{ c: number }>();
+    const rev = await db.prepare('SELECT COUNT(*) AS c FROM asset_revaluations').first<{ c: number }>();
+    const depCount = dep?.c ?? 0;
+    const revCount = rev?.c ?? 0;
+    if (depCount > 0 || revCount > 0) {
+      warnings.push(
+        `该备份为 v1 格式（不含折旧/重估），恢复后 ${depCount} 条折旧配置、${revCount} 条重估记录已被清空且无法从本文件恢复；`
+        + '请改用新版本导出的备份，或恢复后到「实物资产」页重新录入。'
+      );
+    }
+    warnings.push('该备份为 v1 格式：或有负债与健康阈值配置不在备份内，已保留当前值未做改动。');
+  }
+
+  const deletes: ReturnType<Env['DB']['prepare']>[] = [
     db.prepare('DELETE FROM correction_logs'),
+    // 扩展表必须先于 tree_nodes / tree_configs 删除（外键 NO ACTION，D1 强制）
+    db.prepare('DELETE FROM asset_revaluations'),
+    db.prepare('DELETE FROM asset_depreciation'),
     db.prepare('DELETE FROM snapshot_large_items'),
     db.prepare('DELETE FROM snapshot_cat_amounts'),
     db.prepare('DELETE FROM snapshot_debts'),
@@ -375,13 +645,20 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
     db.prepare('DELETE FROM monthly_snapshots'),
     db.prepare('DELETE FROM report_snapshots'),
     db.prepare('DELETE FROM ai_analyses'),
+  ];
+  if (isV2) {
+    // v2 为全量覆盖：或有负债 / 健康配置随备份重建；v1 不含这两张表 → 保留原值
+    deletes.push(db.prepare('DELETE FROM contingent_liabilities'));
+    deletes.push(db.prepare('DELETE FROM health_config'));
+  }
+  deletes.push(
     db.prepare('DELETE FROM debts'),
     db.prepare('DELETE FROM cat_items'),
     db.prepare('DELETE FROM cat_configs'),
     db.prepare('DELETE FROM tree_nodes'),
-    db.prepare('DELETE FROM tree_configs'),
-  ];
-  await db.batch(stmts);
+    db.prepare('DELETE FROM tree_configs')
+  );
+  await db.batch(deletes);
 
   // ---- tree configs（名称路径 → 新 id） ----
   const treeNodeIdByVersion = new Map<number, Map<string, number>>();
@@ -397,10 +674,25 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
     const ids: number[] = [];
     for (const n of cfg.nodes) {
       const r = await db.prepare(
-        `INSERT INTO tree_nodes (config_id, parent_id, name, node_type, target_rate_annual, update_freq, enabled, sort_order, identity_info, is_placeholder, created_at)
-         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO tree_nodes (config_id, parent_id, name, node_type, target_rate_annual, update_freq, enabled, sort_order,
+         identity_info, is_placeholder, asset_category, liquidity, created_at)
+         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
-        .bind(configId, n.name, n.nodeType, n.targetRateAnnual ?? null, n.updateFreq ?? null, n.enabled ? 1 : 0, n.sortOrder ?? 0, n.identityInfo ?? null, n.isPlaceholder ? 1 : 0, now)
+        .bind(
+          configId,
+          n.name,
+          n.nodeType,
+          n.targetRateAnnual ?? null,
+          n.updateFreq ?? null,
+          n.enabled ? 1 : 0,
+          n.sortOrder ?? 0,
+          n.identityInfo ?? null,
+          n.isPlaceholder ? 1 : 0,
+          // v1 备份无这两列 → 回退默认值（与迁移 0003/0007 的 DEFAULT 一致）
+          (ASSET_CATEGORIES as readonly string[]).includes(String(n.assetCategory)) ? String(n.assetCategory) : 'financial',
+          (LIQUIDITIES as readonly string[]).includes(String(n.liquidity)) ? String(n.liquidity) : 'medium',
+          now
+        )
         .run();
       const id = Number(r.meta.last_row_id);
       ids.push(id);
@@ -564,8 +856,124 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
       .run();
   }
 
+  // ---- v2：折旧参数（配置版本 + 名称路径 → 新 node_id） ----
+  let restoredDepreciations = 0;
+  let skippedDepreciations = 0;
+  for (const d of p.depreciations ?? []) {
+    const configId = treeConfigIdByVersion.get(d.treeConfigVersion);
+    const nodeId = treeNodeIdByVersion.get(d.treeConfigVersion)?.get(d.nodeKey);
+    if (configId === undefined || nodeId === undefined) {
+      skippedDepreciations++;
+      continue;
+    }
+    await db.prepare(
+      `INSERT INTO asset_depreciation (node_id, config_id, depreciation_category, original_value, purchase_date,
+       useful_life_months, salvage_rate, salvage_mode, market_salvage_value, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+      .bind(
+        nodeId,
+        configId,
+        d.depreciationCategory,
+        d.originalValue,
+        d.purchaseDate,
+        d.usefulLifeMonths,
+        d.salvageRate,
+        d.salvageMode,
+        d.marketSalvageValue ?? null,
+        now
+      )
+      .run();
+    restoredDepreciations++;
+  }
+  if (skippedDepreciations > 0) {
+    warnings.push(`${skippedDepreciations} 条折旧配置因节点路径无法解析被跳过（其余已恢复）。`);
+  }
+
+  // ---- v2：重估记录（created_by 不导出 → NULL，避免跨实例用户 id 误挂） ----
+  let restoredRevaluations = 0;
+  let skippedRevaluations = 0;
+  for (const r of p.revaluations ?? []) {
+    const nodeId = treeNodeIdByVersion.get(r.treeConfigVersion)?.get(r.nodeKey);
+    if (nodeId === undefined) {
+      skippedRevaluations++;
+      continue;
+    }
+    const changeCents = Math.round(r.newValue * 100) - Math.round(r.previousValue * 100);
+    await db.prepare(
+      `INSERT INTO asset_revaluations (node_id, revaluation_date, previous_value_cents, new_value_cents, change_cents,
+       change_type, reason, appraiser, created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`
+    )
+      .bind(
+        nodeId,
+        r.revaluationDate,
+        Math.round(r.previousValue * 100),
+        Math.round(r.newValue * 100),
+        Number.isFinite(r.change) ? Math.round(r.change * 100) : changeCents,
+        r.changeType === 'appreciation' || r.changeType === 'depreciation'
+          ? r.changeType
+          : (changeCents >= 0 ? 'appreciation' : 'depreciation'),
+        r.reason ?? null,
+        r.appraiser ?? null,
+        now
+      )
+      .run();
+    restoredRevaluations++;
+  }
+  if (skippedRevaluations > 0) {
+    warnings.push(`${skippedRevaluations} 条重估记录因节点路径无法解析被跳过（其余已恢复）。`);
+  }
+
+  // ---- v2：或有负债 ----
+  let restoredContingent = 0;
+  if (isV2) {
+    for (const r of p.contingentLiabilities ?? []) {
+      await db.prepare(
+        `INSERT INTO contingent_liabilities (name, liability_type, estimated_amount_cents, probability, counterparty,
+         start_date, expiry_date, description, status, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`
+      )
+        .bind(
+          r.name,
+          r.liabilityType,
+          Math.round(r.estimatedAmount * 100),
+          r.probability,
+          r.counterparty ?? null,
+          r.startDate ?? null,
+          r.expiryDate ?? null,
+          r.description ?? null,
+          r.status,
+          now,
+          now
+        )
+        .run();
+      restoredContingent++;
+    }
+  }
+
+  // ---- v2：健康阈值配置（v1 备份不含 → 回填迁移 0007 的缺省值，保证健康页阈值可用） ----
+  let restoredHealthConfig = 0;
+  if (isV2) {
+    for (const r of p.healthConfig ?? []) {
+      await db.prepare('INSERT OR REPLACE INTO health_config (key, value, updated_at) VALUES (?, ?, ?)')
+        .bind(r.key, r.value, now)
+        .run();
+      restoredHealthConfig++;
+    }
+  } else {
+    for (const d of HEALTH_CONFIG_DEFAULTS) {
+      await db.prepare('INSERT OR REPLACE INTO health_config (key, value, updated_at) VALUES (?, ?, ?)')
+        .bind(d.key, d.value, now)
+        .run();
+      restoredHealthConfig++;
+    }
+  }
+
   return {
     restored: true,
+    schemaVersion,
+    warnings,
     counts: {
       treeConfigs: p.treeConfigs.length,
       catConfigs: p.catConfigs.length,
@@ -573,8 +981,10 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
       snapshots: p.snapshots.length,
       reportSnapshots: p.reportSnapshots.length,
       aiAnalyses: p.aiAnalyses.length,
+      depreciations: restoredDepreciations,
+      revaluations: restoredRevaluations,
+      contingentLiabilities: restoredContingent,
+      healthConfig: restoredHealthConfig,
     },
   };
 }
-
-

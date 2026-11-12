@@ -59,7 +59,7 @@
 │   └── lib/               # 错误/响应/校验/密码工具
 ├── functions/api/         # Pages Functions 入口（catch-all → Hono）
 ├── migrations/            # D1 迁移（0001_init + 0002_seed + 0003~0007 扩展）
-├── scripts/               # 冒烟脚本（chart-smoke / ssr-smoke / smoke-online）
+├── scripts/               # 冒烟/自测脚本（chart-smoke / ssr-smoke / smoke-online / backup-roundtrip / snapshot-debt-sync）
 ├── .github/workflows/     # GitHub Actions 自动部署
 ├── index.html
 ├── wrangler.toml          # Cloudflare 配置（D1 绑定）
@@ -107,6 +107,35 @@ push 到 `main` 即触发 GitHub Actions（`.github/workflows/deploy.yml`）：c
 ## 备份说明
 
 V1.4 起**仅本地备份**（云端 R2 备份已下线）：备份页「下载全量备份」导出 JSON 留档、「从文件恢复」先校验后写入（非法文件不影响现有数据）。请定期下载留档。
+
+备份格式版本（`schemaVersion`）：
+
+| 版本 | 内容 | 恢复行为 |
+|------|------|----------|
+| v2（当前，2026-11 起） | 资产树/分类配置（含 `assetCategory`/`liquidity`）、月度快照、负债、报告快照、AI 记录、**折旧参数、重估记录、或有负债、健康阈值** | 全量覆盖上述所有表 |
+| v1（历史文件） | 不含资产分类/流动性字段，且不含折旧/重估/或有负债/健康阈值 | 兼容恢复：缺失字段回退默认值；折旧与重估因无数据只能清空（返回 `warnings` 明确提示需重新录入）；或有负债与健康阈值保留原值/回填缺省值 |
+
+恢复的删除顺序严格遵循外键依赖：`asset_revaluations` → `asset_depreciation` → 快照明细 → `monthly_snapshots` → 配置与主档 → `tree_nodes`/`tree_configs`。缺这一步会因 D1 强制外键而整批回滚（历史 P0 缺陷，已修复）。
+
+回归自测（本地离线，不需要 wrangler）：
+
+```bash
+# 备份导出 → 恢复往返（外键完整性 / 字段保真 / 扩展表条数 / v1 降级路径）
+npx esbuild backend/services/backupCore.ts --bundle --format=esm --platform=node --outfile=/tmp/backupCore.mjs
+MGS_BACKUP_BUNDLE=/tmp/backupCore.mjs node scripts/backup-roundtrip.mjs
+
+# 负债主档同步（最新月同步 / 历史纠错不回写）
+npx esbuild backend/services/snapshotWriter.ts --bundle --format=esm --platform=node --outfile=/tmp/snapshotWriter.mjs
+MGS_SNAPSHOT_BUNDLE=/tmp/snapshotWriter.mjs node scripts/snapshot-debt-sync.mjs
+```
+
+## 运维约定
+
+- **负债主档**：`debts.balance_cents` 只由「最新月」的快照写入推进；历史纠错/补录不回写主档（避免负债管理页与后续默认值被旧值污染）。返回值 `debtMasterSynced` 标明本次是否同步。
+- **认证数据清理**：过期 `sessions` / `gate_tokens`、冷却期外的 `ip_rate_limit`、180 天前的 `login_audit_log` 由 `/api/auth/verify-invite` 惰性清理（Pages 无 scheduled handler）；也可手动 `GET /api/auth/maintenance`（预览）/ `POST /api/auth/maintenance`（执行，仅 admin）。
+- **审计脱敏**：邀请码输错只记录「长度 + SHA-256 前 8 位」，不再明文入库。
+- **资产树版本**：新版本生效月不得早于上一版本（单调性校验），折旧配置按「节点全路径」而非裸名迁移。
+
 
 ## 文档索引
 

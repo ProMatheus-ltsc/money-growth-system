@@ -289,6 +289,24 @@ export interface BackupCounts {
   snapshots: number;
   reportSnapshots: number;
   aiAnalyses: number;
+  /** v2 起：折旧配置恢复条数（v1 文件不适用） */
+  depreciations?: number;
+  /** v2 起：重估记录恢复条数（v1 文件不适用） */
+  revaluations?: number;
+  /** v2 起：或有负债恢复条数（v1 文件保留原值，为 0） */
+  contingentLiabilities?: number;
+  /** v2 起：健康阈值恢复条数（v1 文件回填缺省值） */
+  healthConfig?: number;
+}
+
+/** POST /api/backups/import 返回体 */
+export interface BackupImportResult {
+  restored: boolean;
+  /** 备份格式版本（1 = 历史文件，2 = 当前） */
+  schemaVersion?: number;
+  /** 数据保真告警（如 v1 文件导致折旧/重估被清空），必须展示给用户 */
+  warnings?: string[];
+  counts: BackupCounts;
 }
 
 // ---------- PDF（§3.32） ----------

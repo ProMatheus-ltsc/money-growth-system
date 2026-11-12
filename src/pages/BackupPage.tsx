@@ -3,18 +3,23 @@
  * - 本地备份：下载全量 JSON（05 §3.26，附件流）；文件恢复「先校验后写入」（05 §3.27），
  *   非法拒绝且现有数据不变，合法二次确认后覆盖并全局刷新（F-07 规则 3）
  * - 云端备份（R2）已下线（2026-08-27，用户不需要 R2）：请自行下载 JSON 留档。
+ * - v2（2026-11）：备份纳入折旧/重估/或有负债/健康阈值 + 节点资产分类与流动性；
+ *   服务端若因历史 v1 文件而清空折旧/重估，会在 warnings 中明确返回，页面照实展示。
  */
 import { useRef, useState } from 'react';
 import { useToast } from '@shared/core/hooks/useToast';
 import { ConfirmDialog } from '@shared/core/components/ConfirmDialog';
 import { Download, HardDrive, RefreshCw, AlertTriangle } from 'lucide-react';
 import { api, apiBlob, ApiError } from '../lib/api';
-import type { BackupCounts } from '../lib/types';
+import type { BackupCounts, BackupImportResult } from '../lib/types';
+
+/** 支持恢复的备份格式版本（v1 为历史文件，服务端降级处理并返回告警） */
+const SUPPORTED_SCHEMA_VERSIONS = [1, 2];
 
 export default function BackupPage() {
   const { showToast } = useToast();
   const [busy, setBusy] = useState<string | null>(null); // 'import' | 'export'
-  const [confirmImport, setConfirmImport] = useState<{ payload: unknown; summary: string } | null>(null);
+  const [confirmImport, setConfirmImport] = useState<{ payload: unknown; summary: string; legacy: boolean } | null>(null);
   const [importErrors, setImportErrors] = useState<string[]>([]);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -47,19 +52,32 @@ export default function BackupPage() {
       const payload = JSON.parse(text) as Record<string, unknown>;
       // 客户端预检（服务端仍会以同一校验器权威校验，05 §3.27）
       const problems: string[] = [];
-      if (payload.schemaVersion !== 1) problems.push(`schemaVersion 应为 1（实际 ${String(payload.schemaVersion)}）`);
+      const schemaVersion = Number(payload.schemaVersion);
+      if (!SUPPORTED_SCHEMA_VERSIONS.includes(schemaVersion)) {
+        problems.push(`schemaVersion 应为 ${SUPPORTED_SCHEMA_VERSIONS.join(' 或 ')}（实际 ${String(payload.schemaVersion)}）`);
+      }
       for (const k of ['treeConfigs', 'catConfigs', 'debts', 'snapshots']) {
         if (!Array.isArray(payload[k])) problems.push(`缺少数组字段 ${k}`);
+      }
+      // v2 起必含四组扩展数据：缺失说明文件被截断，先拦下避免服务端报一堆字段错误
+      if (schemaVersion >= 2) {
+        for (const k of ['depreciations', 'revaluations', 'contingentLiabilities', 'healthConfig']) {
+          if (!Array.isArray(payload[k])) problems.push(`v${schemaVersion} 备份缺少数组字段 ${k}（文件可能被截断）`);
+        }
       }
       if (problems.length > 0) {
         setImportErrors(problems);
         showToast('文件预检未通过，现有数据未变更', 'error', 6000);
         return;
       }
+      const legacy = schemaVersion === 1;
       const snaps = (payload.snapshots as { month?: string }[]).length;
       const trees = (payload.treeConfigs as unknown[]).length;
-      const summary = `含 ${trees} 个资产树配置版本、${(payload.catConfigs as unknown[]).length} 个分类配置版本、${(payload.debts as unknown[]).length} 项负债、${snaps} 个月度快照。恢复将全量覆盖现有业务数据（账号不受影响）。建议恢复前先下载一份当前数据留档。`;
-      setConfirmImport({ payload, summary });
+      const extra = legacy
+        ? '该文件为 v1 旧格式：不含折旧/重估/或有负债/健康阈值，恢复后折旧与重估将被清空（需重新录入），或有负债与健康阈值保持现状。'
+        : `含折旧 ${(payload.depreciations as unknown[]).length} 条、重估 ${(payload.revaluations as unknown[]).length} 条、或有负债 ${(payload.contingentLiabilities as unknown[]).length} 条、健康阈值 ${(payload.healthConfig as unknown[]).length} 项。`;
+      const summary = `含 ${trees} 个资产树配置版本、${(payload.catConfigs as unknown[]).length} 个分类配置版本、${(payload.debts as unknown[]).length} 项负债、${snaps} 个月度快照。${extra} 恢复将全量覆盖现有业务数据（账号不受影响）。建议恢复前先下载一份当前数据留档。`;
+      setConfirmImport({ payload, summary, legacy });
     } catch {
       setImportErrors(['文件不是合法 JSON，已拒绝（现有数据未变更）。']);
       showToast('文件不是合法 JSON，已拒绝', 'error');
@@ -75,8 +93,20 @@ export default function BackupPage() {
     setConfirmImport(null);
     setBusy('import');
     try {
-      const res = await api<{ restored: boolean; counts: BackupCounts }>('/api/backups/import', { method: 'POST', body: { payload } });
-      showToast(`恢复成功（快照 ${res.counts.snapshots} 个月 / 报表 ${res.counts.reportSnapshots} 份 / AI ${res.counts.aiAnalyses} 条），即将刷新页面`, 'success', 6000);
+      const res = await api<BackupImportResult>('/api/backups/import', { method: 'POST', body: { payload } });
+      const c = res.counts;
+      showToast(
+        `恢复成功（快照 ${c.snapshots} 个月 / 报表 ${c.reportSnapshots} 份 / 折旧 ${c.depreciations ?? 0} 条 / 重估 ${c.revaluations ?? 0} 条），即将刷新页面`,
+        'success',
+        6000
+      );
+      // 历史 v1 文件会带回「折旧/重估被清空」等告警：必须照实展示，不能静默刷新掉
+      if (res.warnings && res.warnings.length > 0) {
+        setImportErrors(res.warnings.map((w) => `⚠️ ${w}`));
+        showToast('恢复完成，但存在数据保真告警，请查看页面提示', 'warning', 10000);
+        setTimeout(() => window.location.reload(), 6000);
+        return;
+      }
       setTimeout(() => window.location.reload(), 1200);
     } catch (e) {
       const ae = e as ApiError;
@@ -119,11 +149,11 @@ export default function BackupPage() {
           <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void onFilePicked(f); }} />
         </div>
         <p className="mt-2 text-xs text-slate-400">
-          下载内容含资产树与分类配置版本、全部月度快照、负债、报告快照与 AI 记录（不含账号信息、不加密，Q2 定论；不含折旧/重估/或有负债/健康配置扩展表，恢复后需重新录入）。恢复先校验后写入：非法文件拒绝且现有数据不变。
+          下载内容含资产树与分类配置版本（含资产分类/流动性）、全部月度快照、负债、报告快照、AI 记录、实物资产折旧参数、资产重估记录、或有负债与健康阈值配置（不含账号信息、不加密，Q2 定论）。恢复先校验后写入：非法文件拒绝且现有数据不变。
         </p>
         {importErrors.length > 0 && (
           <div className="mt-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
-            <p className="mb-1 font-medium">恢复被拒绝（现有数据未变更）：</p>
+            <p className="mb-1 font-medium">{confirmImport?.legacy ? '恢复被拒绝（现有数据未变更）：' : '恢复结果提示：'}</p>
             <ul className="list-inside list-disc space-y-0.5">
               {importErrors.map((e, i) => (
                 <li key={i}>{e}</li>
@@ -135,7 +165,7 @@ export default function BackupPage() {
 
       <ConfirmDialog
         open={confirmImport !== null}
-        title="从本地文件恢复"
+        title={confirmImport?.legacy ? '从本地文件恢复（v1 旧格式）' : '从本地文件恢复'}
         message={confirmImport?.summary ?? ''}
         confirmText="覆盖恢复"
         variant="warning"
