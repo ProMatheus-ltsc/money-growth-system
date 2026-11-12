@@ -312,7 +312,12 @@ async function main() {
       check('v1 恢复后外键仍完整', fk2.length === 0, JSON.stringify(fk2.slice(0, 3)));
       const cat = sqlite.prepare("SELECT asset_category FROM tree_nodes WHERE name = '手机'").get();
       check('v1 恢复后缺失字段回退 financial（文档化的降级行为）', cat?.asset_category === 'financial', JSON.stringify(cat));
-      check('v1 恢复后健康阈值已回填缺省值', (sqlite.prepare('SELECT COUNT(*) AS c FROM health_config').get()?.c ?? 0) >= 5, '');
+      check('v1 恢复后健康阈值仍齐备', (sqlite.prepare('SELECT COUNT(*) AS c FROM health_config').get()?.c ?? 0) >= 5, '');
+      check(
+        'v1 恢复不覆盖用户自定义健康阈值',
+        sqlite.prepare("SELECT value FROM health_config WHERE key = 'savings_rate_min'").get()?.value === '0.25',
+        String(sqlite.prepare("SELECT value FROM health_config WHERE key = 'savings_rate_min'").get()?.value)
+      );
     } catch (e) {
       bad('v1 备份可恢复（不因缺扩展表而失败）', String(e?.message ?? e));
     }

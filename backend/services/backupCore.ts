@@ -952,7 +952,7 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
     }
   }
 
-  // ---- v2：健康阈值配置（v1 备份不含 → 回填迁移 0007 的缺省值，保证健康页阈值可用） ----
+  // ---- v2：健康阈值配置（v1 备份不含 → 只补齐缺失键，绝不覆盖用户已定制的值） ----
   let restoredHealthConfig = 0;
   if (isV2) {
     for (const r of p.healthConfig ?? []) {
@@ -962,12 +962,13 @@ export async function restoreFromPayload(db: Env['DB'], p: BackupPayload) {
       restoredHealthConfig++;
     }
   } else {
+    // v1：health_config 未被删除，这里仅 INSERT OR IGNORE 补齐缺省键（幂等，不改动既有值）
     for (const d of HEALTH_CONFIG_DEFAULTS) {
-      await db.prepare('INSERT OR REPLACE INTO health_config (key, value, updated_at) VALUES (?, ?, ?)')
+      await db.prepare('INSERT OR IGNORE INTO health_config (key, value, updated_at) VALUES (?, ?, ?)')
         .bind(d.key, d.value, now)
         .run();
-      restoredHealthConfig++;
     }
+    restoredHealthConfig = HEALTH_CONFIG_DEFAULTS.length;
   }
 
   return {
