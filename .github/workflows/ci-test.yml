@@ -1,5 +1,5 @@
 # 单元测试必跑（REQ-007 / COMP-005）：任何 push / PR 触发回归保护。
-# 站点依赖含 file:../shared-core，CI 用最小 stub 满足安装后跑 npm test（含覆盖率阈值）。
+# 站点依赖含 file:../shared-core，CI 把公共包 clone 到项目父目录后跑 npm test（含覆盖率阈值）。
 #
 # 注意（2026-11-12 修复）：step 的 name 里若出现「冒号 + 空格」（例如 "(file: dependency)"），
 # 未加引号会被 YAML 解析成嵌套映射，导致整个工作流解析失败 —— 表现为 run 立即 failure、
@@ -18,11 +18,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.18'
-      - name: 'Stub sibling @shared/core (file: dependency not on CI)'
+      # @shared/core 为 file:../shared-core 本地路径依赖，CI 需先把公共包 clone 到项目父目录。
+      # 必须 clone 真实源码而不是 stub —— 测试里会 import @shared/core/server/authCore
+    # （统一认证的密码哈希实现），stub 导不出这些子路径。
+      - name: 'Clone sibling @shared/core (file: dependency)'
         run: |
-          mkdir -p ../shared-core/src
-          printf '{"name":"@shared/core","version":"0.0.0","type":"module","main":"src/index.ts"}\n' > ../shared-core/package.json
-          printf 'export {};\n' > ../shared-core/src/index.ts
+          git clone --depth 1 https://github.com/ProMatheus-ltsc/shared-core.git ../shared-core
+          cd ../shared-core && npm install --no-audit --no-fund
       - name: Install dependencies
         run: npm install --no-audit --no-fund
       - name: Run unit tests with coverage

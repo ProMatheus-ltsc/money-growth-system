@@ -14,7 +14,7 @@ import { LoadingSpinner } from '@shared/core/components/LoadingSpinner';
 import { Lock } from 'lucide-react';
 import { api } from '../lib/api';
 import { isValidPassword, isValidUsername } from '../lib/validate';
-import { setGateToken } from '../adapters/auth/restAuthDriver';
+import { setGateToken, invalidateFirstTimeCache } from '../adapters/auth/restAuthDriver';
 
 export default function LoginPage() {
   const { state } = useAuth();
@@ -293,7 +293,8 @@ function InitForm() {
         },
       });
       showToast('初始化成功，请使用管理员账号登录', 'success');
-      await reload(); // users 非空 → 状态机进入 login
+      invalidateFirstTimeCache(); // users 已非空，重新探测会得到「已初始化」
+      await reload(); // 状态机进入 login
     } catch (err) {
       const e2 = err as { message?: string; details?: { field: string; message: string }[] };
       setErrors(e2.details?.map((d) => `${d.field}: ${d.message}`) ?? [e2.message ?? '初始化失败']);

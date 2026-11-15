@@ -8,7 +8,7 @@ import { Hono } from 'hono';
 import type { Env } from '../env';
 import { ApiError, authFailed, conflict, forbidden, invalidParam, lockedOut } from '../lib/errors';
 import { fail, ok } from '../lib/http';
-import { derivePasswordHash, newToken, randomSaltHex } from '../lib/password';
+import { derivePasswordHash, newToken, randomSaltHex, verifyPasswordColumn } from '../lib/password';
 import { strField, USERNAME_RE, idParam } from '../lib/validate';
 import { requireAdmin, requireAuth, parseToken, type AppEnv } from '../middleware/auth';
 import { pruneStaleAuthRows } from '../services/maintenance';
@@ -202,8 +202,10 @@ auth.post('/login', async (c) => {
     throw lockedOut();
   }
 
-  const hash = await derivePasswordHash(password!, user.salt);
-  if (hash !== user.password_hash) {
+  // 密码校验下沉 @shared/core 的统一认证（常量时间比较），
+  // 同时认「裸摘要 + 独立 salt 列」这一本项目历史格式。
+  const valid = await verifyPasswordColumn(password!, user.password_hash, user.salt);
+  if (!valid) {
     const attempts = user.failed_attempts + 1;
     if (attempts >= MAX_ATTEMPTS) {
       const lockedUntil = new Date(now.getTime() + LOCK_MINUTES * 60_000).toISOString();

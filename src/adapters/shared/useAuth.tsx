@@ -1,32 +1,34 @@
 /**
- * 认证 Hook + Provider：管理登录/注册/登出状态机
- * 可配置版本 - 各项目通过 configureDB 设置不同的数据库前缀
+ * 认证 Hook + Provider —— 转发到 @shared/core 的统一认证。
  *
- * PATCHES #1（family-asset-growth-tracker 适配）：AuthDriver 注入扩展
- * - 新增可选 AuthDriver（probe/login/logout）注入点：消费方可接入服务端权威认证
- *   （本项目注入 REST 驱动，见 src/adapters/auth/restAuthDriver.ts）；
- * - 未注入 driver 时保持上游 IndexedDB 本地认证行为完全不变；
- * - 上下文新增 role（account?.role，用于只读/管理员角色路由）与 reload
- *   （首次初始化完成后刷新状态机进入 login）。
+ * 本项目原先 vendor 了一份 shared-core 的 useAuth（并打了 AuthDriver 注入补丁），
+ * 与上游实现逐渐分化。这次把认证收归共享包：
+ * - 认证状态机、错误语义：shared-core 的 `AuthProvider` / `useAuth`
+ * - 服务端权威认证的具体实现：本项目的 `src/adapters/auth/restAuthDriver.ts`
+ *
+ * 对外形状保持不变（调用方无须改写）：
+ *   state / account / role / login / register / logout / resetPassword / reload / error
+ *
+ * 与共享包的差异（在本文件消化）：
+ * - 共享包用 `user`（统一 AuthUser），本项目对外仍用 `account`，
+ *   且 account 上带 `role`（只读/管理员）。
+ * - 共享包是四态，本项目额外提供 `reload`（首次初始化完成后刷新状态机）。
  */
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useContext, useMemo } from 'react';
+import {
+  AuthProvider as SharedAuthProvider,
+  useAuth as useSharedAuth,
+  type AuthDriver,
+  type AuthUser,
+} from '@shared/core/auth';
 import type { Account } from '@shared/core/types';
-import { setCurrentAccountId, listAccounts, getDBPrefix } from '@shared/core/services/db';
-import { registerAccount, verifyAccountPassword, resetAccountPassword } from '@shared/core/services/auth';
 
-type AuthState = 'loading' | 'firstTime' | 'login' | 'authenticated';
-
-/** AuthDriver 账号：Account + 角色（本地驱动下角色缺省 admin） */
+/** AuthDriver 账号：Account + 角色（服务端权威，本地驱动下角色缺省 admin） */
 export interface AuthDriverAccount extends Account {
   role: string;
 }
 
-/** AuthDriver 契约：服务端权威认证的最小注入点（探测/登录/登出） */
-export interface AuthDriver {
-  probe: () => Promise<{ account: AuthDriverAccount | null; hasAccounts: boolean }>;
-  login: (username: string, password: string) => Promise<AuthDriverAccount>;
-  logout: () => Promise<void>;
-}
+type AuthState = 'loading' | 'firstTime' | 'login' | 'authenticated';
 
 interface AuthContextType {
   state: AuthState;
@@ -34,183 +36,65 @@ interface AuthContextType {
   role: string | null;
   login: (username: string, password: string) => Promise<boolean>;
   register: (username: string, password: string) => Promise<boolean>;
-  logout: () => void;
+  logout: () => Promise<void>;
   resetPassword: (username: string, newPassword: string) => Promise<boolean>;
+  /** 重新探测会话（首次初始化完成后调用） */
   reload: () => Promise<void>;
   error: string | null;
 }
-
-const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({
   children,
   driver,
 }: {
   children: React.ReactNode;
-  /** 可选认证驱动：注入后走服务端权威认证（PATCHES #1） */
-  driver?: AuthDriver;
+  /** 认证驱动：本项目注入服务端权威的 REST 驱动 */
+  driver: AuthDriver;
 }) {
-  const [state, setState] = useState<AuthState>('loading');
-  const [account, setAccount] = useState<Account | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [role, setRole] = useState<string | null>(null);
-
-  const SESSION_KEY = `${getDBPrefix()}-current-account`;
-
-  /** driver 模式：探测会话/初始化状态 */
-  const initWithDriver = useCallback(async () => {
-    const res = await driver!.probe();
-    if (res.account) {
-      setAccount(res.account);
-      setRole(res.account.role);
-      setState('authenticated');
-    } else {
-      setAccount(null);
-      setRole(null);
-      setState(res.hasAccounts ? 'login' : 'firstTime');
-    }
-  }, [driver]);
-
-  /** 本地模式：IndexedDB 账号 + localStorage 会话（上游原逻辑） */
-  const initWithLocal = useCallback(async () => {
-    const accounts = await listAccounts();
-    const savedId = localStorage.getItem(SESSION_KEY);
-
-    if (savedId) {
-      const found = accounts.find((a) => a.id === savedId);
-      if (found) {
-        setCurrentAccountId(found.id);
-        setAccount(found);
-        setRole('admin');
-        setState('authenticated');
-        return;
-      }
-    }
-
-    setState(accounts.length === 0 ? 'firstTime' : 'login');
-  }, [SESSION_KEY]);
-
-  const reload = useCallback(async () => {
-    try {
-      if (driver) {
-        await initWithDriver();
-      } else {
-        await initWithLocal();
-      }
-    } catch {
-      setState('firstTime');
-    }
-  }, [driver, initWithDriver, initWithLocal]);
-
-  useEffect(() => {
-    async function init() {
-      try {
-        if (driver) {
-          await initWithDriver();
-        } else {
-          await initWithLocal();
-        }
-      } catch {
-        setState('firstTime');
-      }
-    }
-    init();
-  }, [driver, initWithDriver, initWithLocal]);
-
-  const login = useCallback(
-    async (username: string, password: string): Promise<boolean> => {
-      setError(null);
-      try {
-        if (driver) {
-          const acc = await driver.login(username, password);
-          setAccount(acc);
-          setRole(acc.role);
-          setState('authenticated');
-          return true;
-        }
-        const acc = await verifyAccountPassword(username, password);
-        if (!acc) {
-          setError('用户名或密码错误');
-          return false;
-        }
-        setCurrentAccountId(acc.id);
-        localStorage.setItem(SESSION_KEY, acc.id);
-        setAccount(acc);
-        setRole('admin');
-        setState('authenticated');
-        return true;
-      } catch (e) {
-        setError(e instanceof Error ? e.message : '登录失败');
-        return false;
-      }
-    },
-    [driver, SESSION_KEY]
-  );
-
-  const register = useCallback(
-    async (username: string, password: string): Promise<boolean> => {
-      if (driver) {
-        setError('服务端认证模式下不支持本地注册');
-        return false;
-      }
-      setError(null);
-      try {
-        const acc = await registerAccount(username, password);
-        setCurrentAccountId(acc.id);
-        localStorage.setItem(SESSION_KEY, acc.id);
-        setAccount(acc);
-        setRole('admin');
-        setState('authenticated');
-        return true;
-      } catch (e) {
-        setError(e instanceof Error ? e.message : '注册失败');
-        return false;
-      }
-    },
-    [driver, SESSION_KEY]
-  );
-
-  const logout = useCallback(() => {
-    if (driver) {
-      void driver.logout().catch(() => undefined);
-    }
-    setCurrentAccountId(undefined);
-    localStorage.removeItem(SESSION_KEY);
-    setAccount(null);
-    setRole(null);
-    setState('login');
-    setError(null);
-  }, [driver, SESSION_KEY]);
-
-  const resetPassword = useCallback(
-    async (username: string, newPassword: string): Promise<boolean> => {
-      if (driver) {
-        setError('服务端认证模式下不支持本地重置密码');
-        return false;
-      }
-      setError(null);
-      try {
-        await resetAccountPassword(username, newPassword);
-        return true;
-      } catch (e) {
-        setError(e instanceof Error ? e.message : '重置失败');
-        return false;
-      }
-    },
-    [driver]
-  );
-
   return (
-    <AuthContext.Provider
-      value={{ state, account, role, login, register, logout, resetPassword, reload, error }}
-    >
+    <SharedAuthProvider driver={driver} errorMode="boolean">
       {children}
-    </AuthContext.Provider>
+    </SharedAuthProvider>
   );
 }
 
 export function useAuth(): AuthContextType {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
+  const shared = useSharedAuth();
+
+  const role = useMemo(() => {
+    const value = shared.user?.extra?.role;
+    return typeof value === 'string' ? value : null;
+  }, [shared.user]);
+
+  /** 统一的 Account 形态：保留上游 Account 字段，role 挂在上层 */
+  const account = useMemo<Account | null>(() => {
+    const user: AuthUser | null = shared.user;
+    if (!user) return null;
+    const base: Account = {
+      id: user.id,
+      username: user.username,
+      passwordHash: '',
+      salt: '',
+      createdAt: new Date().toISOString(),
+    };
+    return role ? { ...base, role } : base;
+  }, [shared.user, role]);
+
+  const reload = useCallback(async () => {
+    await shared.refresh();
+  }, [shared]);
+
+  return {
+    state: shared.state,
+    account,
+    role,
+    login: shared.login,
+    // 本项目未开放自助注册（服务端已删除 /api/auth/register），
+    // 共享包会给出「当前系统未开放自助注册」的提示。
+    register: shared.register,
+    logout: shared.logout,
+    resetPassword: shared.resetPassword,
+    reload,
+    error: shared.error,
+  };
 }
