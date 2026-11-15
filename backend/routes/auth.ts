@@ -241,7 +241,7 @@ auth.post('/login', async (c) => {
  * 记录 IP 级认证失败：递增失败计数，达到阈值（IP_MAX_ATTEMPTS）时写入锁定截止时间。
  * 使用 UPSERT（INSERT ... ON CONFLICT DO UPDATE）确保并发安全。
  */
-async function recordIpFailure(db: D1Database, ip: string, nowIso: string, now: Date) {
+async function recordIpFailure(db: Env['DB'], ip: string, nowIso: string, now: Date) {
   const existing = await db.prepare('SELECT failed_attempts FROM ip_rate_limit WHERE ip = ?').bind(ip)
     .first<{ failed_attempts: number }>();
   const attempts = (existing?.failed_attempts ?? 0) + 1;

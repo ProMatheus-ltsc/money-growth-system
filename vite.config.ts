@@ -34,4 +34,10 @@ export default defineConfig({
   build: {
     target: 'es2020',
   },
+  test: {
+    // 后端测试跑在 Node 环境（要用 node:sqlite 验证 D1 相关实现），
+    // 浏览器默认值会把 node:sqlite 当成包名解析。
+    environment: 'node',
+    include: ['tests/**/*.test.ts', 'src/**/*.test.ts'],
+  },
 });
